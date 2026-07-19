@@ -43,6 +43,12 @@ class G2BulkService
     public function checkPlayerId(string $gameCode, string $playerId, ?string $serverId): array
     {
         $url = "{$this->baseUrl}/games/checkPlayerId";
+        
+        // G2Bulk Free Fire verification requires region code, freefire_sg covers global accounts
+        if ($gameCode === 'freefire_global') {
+            $gameCode = 'freefire_sg';
+        }
+
         $payload = [
             'game' => $gameCode,
             'user_id' => $playerId,
