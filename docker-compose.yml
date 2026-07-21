@@ -1,17 +1,30 @@
 version: '3.8'
 
 services:
-  # Laravel App Container (PHP-FPM + Supervisor for Queue/Scheduler)
+  # Laravel App Container (PHP-FPM + Supervisor for Horizon)
   backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: vtopup_prod_backend
-    restart: always
+    restart: unless-stopped
+    read_only: true
+    user: "1000:1000"
+    tmpfs:
+      - /tmp:uid=1000,gid=1000
+      - /var/run:uid=1000,gid=1000
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     volumes:
-      - .:/var/www
-      - ./storage:/var/www/storage
-      - ./bootstrap/cache:/var/www/bootstrap/cache
+      - app_data:/var/www:ro
+      - storage_data:/var/www/storage:rw
+      - cache_data:/var/www/bootstrap/cache:rw
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
@@ -20,10 +33,15 @@ services:
       - SESSION_DRIVER=redis
     env_file:
       - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 9000 || exit 1"]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
     networks:
       - vtopup_network
@@ -32,15 +50,28 @@ services:
   redis:
     image: redis:7-alpine
     container_name: vtopup_prod_redis
-    restart: always
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     volumes:
       - redis_data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - vtopup_network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 20s
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 15s
       timeout: 5s
       retries: 3
 
@@ -48,25 +79,42 @@ services:
   webserver:
     image: nginx:alpine
     container_name: vtopup_prod_webserver
-    restart: always
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp" # Required for HTTP/3 (QUIC)
     environment:
       - FRONTEND_URL=${FRONTEND_URL}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     volumes:
-      - .:/var/www
-      - ./docker/nginx.conf.template:/etc/nginx/templates/default.conf.template
-      - /etc/letsencrypt:/etc/letsencrypt
+      - app_data:/var/www:ro
+      - ./docker/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - certs_data:/etc/letsencrypt:ro
     depends_on:
       - backend
       - redis
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - vtopup_network
 
 volumes:
+  app_data:
+  storage_data:
+  cache_data:
   redis_data:
-    driver: local
+  certs_data:
 
 networks:
   vtopup_network:

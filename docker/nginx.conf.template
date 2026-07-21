@@ -11,8 +11,14 @@ server {
 }
 
 server {
+    # Listen on standard SSL + HTTP/2
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
+    
+    # Listen on HTTP/3 (QUIC)
+    listen 443 quic reuseport;
+    listen [::]:443 quic reuseport;
+
     server_name vtopup-api.example.com;
 
     root /var/www/public;
@@ -28,6 +34,9 @@ server {
     ssl_session_timeout 1d;
     ssl_session_tickets off;
 
+    # HTTP/3 (QUIC) Header Advertising
+    add_header Alt-Svc 'h3=":443"; ma=86400' always;
+
     # Gzip Compression
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
@@ -35,20 +44,26 @@ server {
     gzip_proxied any;
     gzip_comp_level 6;
 
+    # Brotli Compression (Fallback configurations if compiled dynamically)
+    brotli on;
+    brotli_comp_level 6;
+    brotli_types text/plain text/css application/json application/javascript text/xml application/xml;
+
     # Strict Production Security Headers
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-XSS-Protection "1; mode=block" always;
-    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none';" always;
+    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; form-action 'self';" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
     add_header X-Request-ID $request_id always;
 
-    # Max body size configuration
+    # API Request size limits (Strict 10MB upload max)
     client_max_body_size 10M;
 
     location / {
-        # Strict CORS to only Vercel frontend domain configured via env
+        # Strict CORS to Vercel frontend domain configured via env
         if ($request_method = 'OPTIONS') {
             add_header 'Access-Control-Allow-Origin' '${FRONTEND_URL}' always;
             add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
@@ -56,6 +71,9 @@ server {
             add_header 'Access-Control-Max-Age' 1728000;
             add_header 'Content-Type' 'text/plain; charset=utf-8';
             add_header 'Content-Length' 0;
+            
+            # Re-advertise HTTP/3 headers on OPTIONS
+            add_header Alt-Svc 'h3=":443"; ma=86400' always;
             return 204;
         }
 
@@ -75,8 +93,15 @@ server {
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_param HTTP_X_REQUEST_ID $request_id;
-        include fastcgi_params;
+        
+        # Optimize FastCGI buffer sizes for high-performance API JSON outputs
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+        fastcgi_busy_buffers_size 64k;
+        fastcgi_temp_file_write_size 64k;
         fastcgi_read_timeout 60s;
+        
+        include fastcgi_params;
     }
 
     location ~ /\.ht {
