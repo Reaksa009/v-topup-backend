@@ -13,6 +13,31 @@ use App\Http\Controllers\Api\AdminController;
 */
 
 // --- Public Authentication & Catalogs ---
+Route::get('/health', function () {
+    try {
+        $mongoActive = \Illuminate\Support\Facades\DB::connection()->getMongoClient()->listDatabases() ? 'connected' : 'error';
+    } catch (\Exception $e) {
+        $mongoActive = 'error: ' . $e->getMessage();
+    }
+
+    try {
+        $redisActive = \Illuminate\Support\Facades\Redis::ping() ? 'connected' : 'error';
+    } catch (\Exception $e) {
+        $redisActive = 'error: ' . $e->getMessage();
+    }
+
+    $isHealthy = (str_contains($mongoActive, 'connected') && str_contains($redisActive, 'connected'));
+
+    return response()->json([
+        'status' => $isHealthy ? 'healthy' : 'degraded',
+        'timestamp' => now()->toIso8601String(),
+        'services' => [
+            'mongodb' => $mongoActive,
+            'redis' => $redisActive,
+        ]
+    ], $isHealthy ? 200 : 500);
+});
+
 Route::post('/auth/register', [AuthController::class, 'register']);
 Route::post('/auth/login', [AuthController::class, 'login']);
 

@@ -93,7 +93,8 @@ jobs:
           docker compose up -d --no-deps --build backend
           # Run Laravel migrations and clear caches inside the new container
           docker compose exec -T backend php artisan migrate --force
+          docker compose exec -T backend php artisan app:create-mongo-indexes
           docker compose exec -T backend php artisan config:cache
           docker compose exec -T backend php artisan route:cache
           docker compose exec -T backend php artisan view:cache
-          docker compose exec -T backend php artisan queue:restart
+          docker compose exec -T backend php artisan horizon:terminate

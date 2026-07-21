@@ -68,6 +68,11 @@ return [
             'driver' => 'mongodb',
             'dsn' => env('DB_URI', 'mongodb://127.0.0.1:27017/V_topup'),
             'database' => env('DB_DATABASE', 'V_topup'),
+            'options' => [
+                'maxPoolSize' => env('DB_MAX_POOL_SIZE', 100),
+                'minPoolSize' => env('DB_MIN_POOL_SIZE', 10),
+                'retryWrites' => true,
+            ]
         ],
 
         'mariadb' => [
