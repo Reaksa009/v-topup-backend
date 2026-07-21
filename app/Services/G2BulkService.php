@@ -94,6 +94,46 @@ class G2BulkService
      */
     public function placeOrder(string $gameCode, string $catalogueName, string $playerId, ?string $serverId, string $orderNo): array
     {
+        // Resolve and normalize database package name (e.g. "86 Diamond") to G2Bulk catalog name (e.g. "86")
+        try {
+            $catUrl = "{$this->baseUrl}/games/{$gameCode}/catalogue";
+            $catRes = Http::withHeaders([
+                'X-API-Key' => $this->apiKey,
+                'Accept' => 'application/json',
+            ])->timeout(6)->get($catUrl);
+
+            if ($catRes->successful() && isset($catRes->json()['catalogues'])) {
+                $dbName = strtolower(trim($catalogueName));
+                foreach ($catRes->json()['catalogues'] as $cat) {
+                    $catName = strtolower(trim($cat['name']));
+                    $isMatch = false;
+
+                    if ($catName === $dbName) {
+                        $isMatch = true;
+                    } elseif (str_contains($dbName, 'weekly pass') && str_contains($catName, 'weekly') && !str_contains($catName, 'elite')) {
+                        $isMatch = true;
+                    } elseif (str_contains($dbName, 'weekly elite') && str_contains($catName, 'weekly elite')) {
+                        $isMatch = true;
+                    } elseif (str_contains($dbName, 'monthly') && str_contains($catName, 'monthly')) {
+                        $isMatch = true;
+                    } else {
+                        $dbNumOnly = preg_replace('/[^0-9]/', '', $dbName);
+                        $catNumOnly = preg_replace('/[^0-9]/', '', $catName);
+                        if (!empty($dbNumOnly) && !empty($catNumOnly) && $dbNumOnly === $catNumOnly) {
+                            $isMatch = true;
+                        }
+                    }
+
+                    if ($isMatch) {
+                        $catalogueName = $cat['name']; // Set resolved name
+                        break;
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning("G2Bulk catalogue resolution failed: " . $e->getMessage());
+        }
+
         $url = "{$this->baseUrl}/games/{$gameCode}/order";
         $payload = [
             'catalogue_name' => $catalogueName,

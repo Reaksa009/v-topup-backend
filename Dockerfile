@@ -1,4 +1,4 @@
-FROM php:8.2-fpm-alpine
+FROM php:8.4-fpm-alpine
 
 # Set working directory
 WORKDIR /var/www
@@ -18,14 +18,18 @@ RUN apk update && apk add --no-cache \
     autoconf \
     g++ \
     make \
-    openssl-dev
+    openssl-dev \
+    supervisor
 
 # Configure and install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
+    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip opcache
 
-# Install MongoDB PHP extension via PECL
-RUN pecl install mongodb && docker-php-ext-enable mongodb
+# Install MongoDB and Redis PHP extensions via PECL
+RUN pecl install mongodb redis && docker-php-ext-enable mongodb redis
+
+# Copy production OPcache configuration
+COPY docker/opcache.ini /usr/local/etc/php/conf.d/opcache.ini
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -43,5 +47,5 @@ RUN chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache \
 # Expose port 9000 for PHP-FPM
 EXPOSE 9000
 
-# Start PHP-FPM server
-CMD ["php-fpm"]
+# Start Supervisor to manage PHP-FPM, Queue Workers, and Scheduler
+CMD ["/usr/bin/supervisord", "-c", "/var/www/docker/supervisor.conf"]

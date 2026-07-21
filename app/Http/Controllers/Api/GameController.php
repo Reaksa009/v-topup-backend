@@ -210,4 +210,19 @@ class GameController extends Controller
             'message' => 'Order not found or status update could not be parsed.'
         ], 404);
     }
+
+    public function latestNews()
+    {
+        $news = \Illuminate\Support\Facades\Cache::remember('latest_news', 3600, function () {
+            return \App\Models\News::where('is_published', true)
+                ->orderBy('created_at', 'desc')
+                ->limit(5)
+                ->get();
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $news
+        ]);
+    }
 }

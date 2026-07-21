@@ -33,4 +33,9 @@ class EloquentUserRepository implements UserRepositoryInterface
     {
         return User::all();
     }
+
+    public function allPaginated(int $perPage = 15)
+    {
+        return User::orderBy('created_at', 'desc')->paginate($perPage);
+    }
 }

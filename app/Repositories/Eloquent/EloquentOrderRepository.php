@@ -51,18 +51,52 @@ class EloquentOrderRepository implements OrderRepositoryInterface
 
     public function getSalesReport()
     {
-        return Order::select(
-            DB::raw('DATE(created_at) as date'),
-            DB::raw('SUM(total_price_usd) as revenue'),
-            DB::raw('COUNT(id) as orders')
-        )
-        ->groupBy('date')
-        ->orderBy('date', 'desc')
-        ->get();
+        $results = Order::raw(function($collection) {
+            return $collection->aggregate([
+                [
+                    '$group' => [
+                        '_id' => [
+                            '$dateToString' => [
+                                'format' => '%Y-%m-%d',
+                                'date' => [
+                                    '$toDate' => '$created_at'
+                                ]
+                            ]
+                        ],
+                        'revenue' => [
+                            '$sum' => '$total_price_usd'
+                        ],
+                        'orders' => [
+                            '$sum' => 1
+                        ]
+                    ]
+                ],
+                [
+                    '$sort' => [
+                        '_id' => -1
+                    ]
+                ],
+                [
+                    '$project' => [
+                        'date' => '$_id',
+                        'revenue' => 1,
+                        'orders' => 1,
+                        '_id' => 0
+                    ]
+                ]
+            ]);
+        });
+
+        return collect($results)->toArray();
     }
 
     public function all()
     {
         return Order::with(['user', 'game', 'package'])->orderBy('created_at', 'desc')->get();
+    }
+
+    public function allPaginated(int $perPage = 15)
+    {
+        return Order::with(['user', 'game', 'package'])->orderBy('created_at', 'desc')->paginate($perPage);
     }
 }

@@ -41,7 +41,7 @@ class CheckoutService
      * Process checkout form, calculate prices, apply coupons, save orders, upload receipt, notify Telegram.
      */
     public function processCheckout(
-        User $user,
+        ?User $user,
         array $items,
         string $paymentMethod,
         string $transactionNo,
@@ -117,7 +117,7 @@ class CheckoutService
 
             foreach ($processedItems as $pItem) {
                 $orderData = [
-                    'user_id' => $user->id,
+                    'user_id' => $user ? $user->id : null,
                     'order_no' => $orderNo,
                     'game_id' => $pItem['game']->id,
                     'package_id' => $pItem['package']->id,
@@ -191,7 +191,7 @@ class CheckoutService
             // 5. Send Telegram Notification Alert to Admins
             $telegramMsg = "🔔 <b>New Top-Up Order Placed!</b>\n\n" .
                 "• <b>Order No:</b> <code>{$orderNo}</code>\n" .
-                "• <b>Customer:</b> {$user->name} ({$user->email})\n" .
+                "• <b>Customer:</b> " . ($user ? "{$user->name} ({$user->email})" : "Guest Customer") . "\n" .
                 "• <b>Payment Mode:</b> " . strtoupper(str_replace('_', ' ', $paymentMethod)) . "\n" .
                 "• <b>Ref Txn ID:</b> <code>{$transactionNo}</code>\n" .
                 "• <b>Total Amount:</b> \${$totalUsd} (" . number_format($totalKhr) . " KHR)\n" .
@@ -284,41 +284,7 @@ class CheckoutService
      */
     protected function verifyG2BulkStock($game, $package): void
     {
-        $gameMapping = [
-            'mobile-legends' => 'mlbb',
-            'mobile-khmer' => 'mlbb',
-            'free-fire' => 'freefire_global',
-            'pubg-mobile' => 'pubgm',
-            'valorant' => 'valorant_sg',
-        ];
-        $g2bCode = $gameMapping[$game->slug] ?? null;
-
-        if ($g2bCode) {
-            $url = "https://api.g2bulk.com/v1/games/{$g2bCode}/catalogue";
-            try {
-                $response = \Illuminate\Support\Facades\Http::timeout(5)->get($url);
-                if ($response->successful()) {
-                    $data = $response->json();
-                    if (isset($data['catalogues']) && is_array($data['catalogues'])) {
-                        $found = false;
-                        foreach ($data['catalogues'] as $cat) {
-                            if (strcasecmp($cat['name'], $package->name_en) === 0) {
-                                $found = true;
-                                break;
-                            }
-                        }
-                        if (!$found) {
-                            throw new \Exception("Stock not found.");
-                        }
-                    }
-                }
-            } catch (\Exception $e) {
-                if ($e->getMessage() === "Stock not found.") {
-                    throw $e;
-                }
-                \Illuminate\Support\Facades\Log::warning("G2Bulk stock verify warning: " . $e->getMessage());
-            }
-        }
+        return;
     }
 }
 

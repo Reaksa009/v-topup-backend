@@ -10,4 +10,5 @@ interface PaymentRepositoryInterface
     public function updateStatus($id, string $status, $verifiedByUserId = null, ?string $rejectionReason = null);
     public function getPending();
     public function all();
+    public function allPaginated(int $perPage = 15);
 }

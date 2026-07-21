@@ -12,4 +12,5 @@ interface OrderRepositoryInterface
     public function getAnalytics();
     public function getSalesReport();
     public function all();
+    public function allPaginated(int $perPage = 15);
 }

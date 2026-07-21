@@ -9,4 +9,5 @@ interface UserRepositoryInterface
     public function create(array $data);
     public function update($id, array $data);
     public function all();
+    public function allPaginated(int $perPage = 15);
 }

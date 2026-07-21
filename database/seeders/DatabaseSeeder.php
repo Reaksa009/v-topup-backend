@@ -171,11 +171,11 @@ class DatabaseSeeder extends Seeder
             'slug' => 'mobile-khmer',
             'logo_url' => 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=300&auto=format&fit=crop&q=80',
             'banner_url' => 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
-            'description_en' => 'Enter player ID and server ID to purchase diamonds or passes for Khmer Server. Delivery is processed within 1-5 minutes.',
-            'description_kh' => 'បញ្ចូលលេខសម្គាល់អ្នកលេង និងលេខម៉ាស៊ីនបម្រើ ដើម្បីទិញពេជ្រ ឬសំបុត្រប្រចាំសប្តាហ៍សម្រាប់ Khmer Server។ ទំនិញនឹងបញ្ចូលក្នុងរយៈពេល ១ ទៅ ៥ នាទី។',
+            'description_en' => 'Enter player ID to purchase diamonds or passes for Khmer Server. Delivery is processed within 1-5 minutes.',
+            'description_kh' => 'បញ្ចូលលេខសម្គាល់អ្នកលេង ដើម្បីទិញពេជ្រ ឬសំបុត្រប្រចាំសប្តាហ៍សម្រាប់ Khmer Server។ ទំនិញនឹងបញ្ចូលក្នុងរយៈពេល ១ ទៅ ៥ នាទី។',
             'player_id_label_en' => 'Player ID',
             'player_id_label_kh' => 'លេខសម្គាល់អ្នកលេង (Player ID)',
-            'server_id_required' => true,
+            'server_id_required' => false,
             'server_id_label_en' => 'Server ID',
             'server_id_label_kh' => 'លេខម៉ាស៊ីនបម្រើ (Server ID)',
             'is_popular' => true,
@@ -405,7 +405,7 @@ class DatabaseSeeder extends Seeder
             'title_en' => 'Weekly Diamond Pass Special Offer',
             'title_kh' => 'ប្រូម៉ូសិនពិសេសប្រចាំសប្តាហ៍ សំបុត្រពេជ្រ',
             'image_url' => 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
-            'link_url' => '/games/mobile-legends',
+            'link_url' => '/games/mobile-khmer',
             'is_active' => true,
             'order_index' => 1
         ]);

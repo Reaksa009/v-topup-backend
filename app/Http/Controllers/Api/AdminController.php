@@ -38,21 +38,35 @@ class AdminController extends Controller
         $this->g2bulkService = $g2bulkService;
     }
 
-    public function orders()
+    public function orders(Request $request)
     {
-        $orders = $this->orderRepository->all();
+        $perPage = (int)$request->query('per_page', 15);
+        $orders = $this->orderRepository->allPaginated($perPage);
         return response()->json([
             'success' => true,
-            'data' => $orders
+            'data' => $orders->items(),
+            'pagination' => [
+                'current_page' => $orders->currentPage(),
+                'last_page' => $orders->lastPage(),
+                'per_page' => $orders->perPage(),
+                'total' => $orders->total(),
+            ]
         ]);
     }
 
-    public function payments()
+    public function payments(Request $request)
     {
-        $payments = $this->paymentRepository->all();
+        $perPage = (int)$request->query('per_page', 15);
+        $payments = $this->paymentRepository->allPaginated($perPage);
         return response()->json([
             'success' => true,
-            'data' => $payments
+            'data' => $payments->items(),
+            'pagination' => [
+                'current_page' => $payments->currentPage(),
+                'last_page' => $payments->lastPage(),
+                'per_page' => $payments->perPage(),
+                'total' => $payments->total(),
+            ]
         ]);
     }
 
@@ -191,12 +205,19 @@ class AdminController extends Controller
         ]);
     }
 
-    public function users()
+    public function users(Request $request)
     {
-        $users = $this->userRepository->all();
+        $perPage = (int)$request->query('per_page', 15);
+        $users = $this->userRepository->allPaginated($perPage);
         return response()->json([
             'success' => true,
-            'data' => $users
+            'data' => $users->items(),
+            'pagination' => [
+                'current_page' => $users->currentPage(),
+                'last_page' => $users->lastPage(),
+                'per_page' => $users->perPage(),
+                'total' => $users->total(),
+            ]
         ]);
     }
 

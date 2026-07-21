@@ -23,11 +23,16 @@ Route::get('/games/search', [GameController::class, 'search']);
 Route::get('/games/popular', [GameController::class, 'popular']);
 Route::get('/games/featured', [GameController::class, 'featured']);
 Route::get('/banners/active', [AdminController::class, 'activeBanners']);
+Route::get('/news/latest', [GameController::class, 'latestNews']);
 
 Route::get('/settings', [GameController::class, 'getSettings']);
 Route::post('/games/verify-player', [GameController::class, 'verifyPlayer']);
 Route::post('/webhooks/g2bulk', [GameController::class, 'g2bulkWebhook']);
 Route::post('/coupons/validate', [CheckoutController::class, 'validateCoupon']);
+
+Route::post('/orders/checkout', [CheckoutController::class, 'checkout']);
+Route::post('/payments/generate-khqr', [CheckoutController::class, 'generateKhqr']);
+Route::get('/payments/check-khqr/{md5}', [CheckoutController::class, 'checkKhqrStatus']);
 
 // --- Protected Customer Area ---
 Route::middleware('auth:sanctum')->group(function () {
@@ -35,11 +40,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user/profile', [AuthController::class, 'profile']);
     Route::put('/user/profile', [AuthController::class, 'updateProfile']);
     Route::put('/user/change-password', [AuthController::class, 'changePassword']);
-
-    Route::post('/orders/checkout', [CheckoutController::class, 'checkout']);
     Route::get('/orders/my-orders', [CheckoutController::class, 'myOrders']);
-    Route::post('/payments/generate-khqr', [CheckoutController::class, 'generateKhqr']);
-    Route::get('/payments/check-khqr/{md5}', [CheckoutController::class, 'checkKhqrStatus']);
 });
 
 // --- Protected Admin Dashboard Area ---

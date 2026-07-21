@@ -46,4 +46,9 @@ class EloquentPaymentRepository implements PaymentRepositoryInterface
     {
         return Payment::with('order')->orderBy('created_at', 'desc')->get();
     }
+
+    public function allPaginated(int $perPage = 15)
+    {
+        return Payment::with('order')->orderBy('created_at', 'desc')->paginate($perPage);
+    }
 }

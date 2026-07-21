@@ -82,7 +82,13 @@ class CheckoutController extends Controller
         }
 
         try {
-            $user = $request->user();
+            $user = null;
+            if ($token = $request->bearerToken()) {
+                $accessToken = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
+                if ($accessToken) {
+                    $user = $accessToken->tokenable;
+                }
+            }
             
             $order = $this->checkoutService->processCheckout(
                 $user,
