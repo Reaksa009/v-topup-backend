@@ -42,25 +42,26 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none';" always;
+    add_header X-Request-ID $request_id always;
 
     # Max body size configuration
     client_max_body_size 10M;
 
     location / {
-        # Strict CORS to only Vercel frontend domain
+        # Strict CORS to only Vercel frontend domain configured via env
         if ($request_method = 'OPTIONS') {
-            add_header 'Access-Control-Allow-Origin' 'https://v-topup-frontend.vercel.app' always;
+            add_header 'Access-Control-Allow-Origin' '${FRONTEND_URL}' always;
             add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
-            add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Accept, X-Requested-With' always;
+            add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Accept, X-Requested-With, X-Request-ID' always;
             add_header 'Access-Control-Max-Age' 1728000;
             add_header 'Content-Type' 'text/plain; charset=utf-8';
             add_header 'Content-Length' 0;
             return 204;
         }
 
-        add_header 'Access-Control-Allow-Origin' 'https://v-topup-frontend.vercel.app' always;
+        add_header 'Access-Control-Allow-Origin' '${FRONTEND_URL}' always;
         add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
-        add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Accept, X-Requested-With' always;
+        add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Accept, X-Requested-With, X-Request-ID' always;
 
         # Apply rate limiting burst and nodelay
         limit_req zone=api_limit burst=30 nodelay;
@@ -73,6 +74,7 @@ server {
         fastcgi_pass backend:9000;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param HTTP_X_REQUEST_ID $request_id;
         include fastcgi_params;
         fastcgi_read_timeout 60s;
     }

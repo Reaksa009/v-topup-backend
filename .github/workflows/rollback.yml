@@ -1,0 +1,44 @@
+name: CI/CD Production Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker Image Tag to Rollback To (e.g. git commit SHA)'
+        required: true
+        default: 'latest'
+
+jobs:
+  rollback-production:
+    name: Rollback Production Release
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Rollback Container via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: ${{ secrets.SSH_PORT || 22 }}
+        script: |
+          cd /var/www/v-topup/backend
+          
+          # Set target rollback image tag
+          export ROLLBACK_TAG=${{ github.event.inputs.image_tag }}
+          
+          echo "Initiating rollback to image tag: $ROLLBACK_TAG..."
+          
+          # Pull the target rollback image tag
+          docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/vtopup-backend:$ROLLBACK_TAG
+          
+          # Tag it as latest locally to ensure compose matches
+          docker tag ${{ secrets.DOCKER_HUB_USERNAME }}/vtopup-backend:$ROLLBACK_TAG ${{ secrets.DOCKER_HUB_USERNAME }}/vtopup-backend:latest
+          
+          # Recreate containers with the target image
+          docker compose up -d --no-deps --build backend
+          
+          # Terminate Horizon to spawn workers on the rolled back code
+          docker compose exec -T backend php artisan horizon:terminate
+          
+          echo "Rollback to $ROLLBACK_TAG completed successfully!"

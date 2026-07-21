@@ -15,7 +15,8 @@ use App\Http\Controllers\Api\AdminController;
 // --- Public Authentication & Catalogs ---
 Route::get('/health', function () {
     try {
-        $mongoActive = \Illuminate\Support\Facades\DB::connection()->getMongoClient()->listDatabases() ? 'connected' : 'error';
+        $cursor = \Illuminate\Support\Facades\DB::connection()->getMongoDB()->command(['ping' => 1]);
+        $mongoActive = $cursor ? 'connected' : 'error';
     } catch (\Exception $e) {
         $mongoActive = 'error: ' . $e->getMessage();
     }
