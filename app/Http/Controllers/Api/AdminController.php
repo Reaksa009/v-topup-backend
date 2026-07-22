@@ -396,8 +396,6 @@ class AdminController extends Controller
     }
 
     // --- Packages (Products) Management ---
-    public function packages()
-    {
     public function packages(Request $request)
     {
         $packages = Package::with('game')->get();
