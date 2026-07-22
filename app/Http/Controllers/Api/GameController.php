@@ -56,9 +56,7 @@ class GameController extends Controller
 
     public function show($slug)
     {
-        $game = Cache::remember("game_detail_{$slug}", 3600, function () use ($slug) {
-            return $this->gameRepository->findBySlug($slug);
-        });
+        $game = $this->gameRepository->findBySlug($slug);
 
         if (!$game) {
             return response()->json([
