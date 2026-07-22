@@ -45,9 +45,18 @@ class CreateMongoIndexes extends Command
         $db->selectCollection('orders')->createIndex(['user_id' => 1, 'created_at' => -1]);
         $db->selectCollection('orders')->createIndex(['status' => 1]);
 
-        $this->info("Creating indexes on payments...");
-        $db->selectCollection('payments')->createIndex(['order_no' => 1]);
-        $db->selectCollection('payments')->createIndex(['status' => 1]);
+        $this->info("Creating indexes on packages...");
+        $db->selectCollection('packages')->createIndex(['game_id' => 1, 'is_active' => 1]);
+        $db->selectCollection('packages')->createIndex(['provider_catalogue_name' => 1]);
+
+        $this->info("Creating indexes on banners...");
+        $db->selectCollection('banners')->createIndex(['is_active' => 1, 'order_index' => 1]);
+
+        $this->info("Creating indexes on news...");
+        $db->selectCollection('news')->createIndex(['is_published' => 1, 'created_at' => -1]);
+
+        $this->info("Creating indexes on price_audit_logs...");
+        $db->selectCollection('price_audit_logs')->createIndex(['created_at' => -1]);
 
         $this->info("All MongoDB indexes established successfully!");
         return Command::SUCCESS;

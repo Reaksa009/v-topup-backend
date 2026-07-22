@@ -798,7 +798,9 @@ class AdminController extends Controller
 
     public function activeBanners()
     {
-        $banners = Banner::where('is_active', true)->orderBy('order_index', 'asc')->get();
+        $banners = \Illuminate\Support\Facades\Cache::remember('active_banners', 3600, function () {
+            return Banner::where('is_active', true)->orderBy('order_index', 'asc')->get();
+        });
         return response()->json([
             'success' => true,
             'data' => $banners
