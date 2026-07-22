@@ -7,10 +7,8 @@ return [
     | Third Party Services
     |--------------------------------------------------------------------------
     |
-    | This file is for storing the credentials for third party services such
-    | as Mailgun, Postmark, AWS and more. This file provides the de facto
-    | location for this type of information, allowing packages to have
-    | a conventional file to locate the various service credentials.
+    | Store configuration credentials for third-party API services (G2Bulk,
+    | KHQR, Telegram, etc.) avoiding hardcoded tokens in services or controllers.
     |
     */
 
@@ -38,6 +36,18 @@ return [
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
         'admin_chat_id' => env('TELEGRAM_ADMIN_CHAT_ID'),
+    ],
+
+    'g2bulk' => [
+        'api_key' => env('G2BULK_API_KEY', '5fdcdd6b1a6d04645af01f89d21cd68a55b839ae8b36308f1ccab8f6cf982bfe'),
+        'base_url' => env('G2BULK_BASE_URL', 'https://api.g2bulk.com/v1'),
+    ],
+
+    'khqr' => [
+        'base_url' => env('KHQR_API_BASE_URL', 'https://api.khqr.link'),
+        'token' => env('KHQR_API_TOKEN'),
+        'bakong_account_id' => env('KHQR_BAKONG_ACCOUNT_ID'),
+        'merchant_name' => env('KHQR_ACCOUNT_NAME', 'V-TOPUP-STORE CO., LTD.'),
     ],
 
 ];

@@ -819,47 +819,17 @@ class AdminController extends Controller
             ], 404);
         }
 
-        // Map game slug to G2Bulk game code
-        $game = Game::find($order->game_id);
-        $gameSlug = $game ? $game->slug : 'mobile-legends';
-        $gameMapping = [
-            'mobile-legends' => 'mlbb',
-            'mobile-khmer' => 'mlbb',
-            'free-fire' => 'freefire_global',
-            'pubg-mobile' => 'pubgm',
-            'valorant' => 'valorant_sg',
-            'honor-of-kings' => 'hok',
-            'roblox' => 'roblox',
-        ];
-        $gameCode = $gameMapping[$gameSlug] ?? 'mlbb';
-        $catalogueName = $order->package_name;
+        // Set status to processing and dispatch to topup queue
+        $order->status = \App\Enums\OrderStatus::PROCESSING;
+        $order->save();
 
-        $res = $this->g2bulkService->placeOrder(
-            $gameCode,
-            $catalogueName,
-            $order->player_id,
-            $order->server_id,
-            $order->order_no
-        );
-
-        if ($res['success']) {
-            if (isset($res['order_id'])) {
-                $order->g2b_order_id = $res['order_id'];
-            }
-            $order->status = 'processing';
-            $order->save();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Order retried and submitted to G2Bulk wholesaler successfully.',
-                'data' => $order
-            ]);
-        }
+        \App\Jobs\ProcessTopupJob::dispatch($order->id)->onQueue('topup');
 
         return response()->json([
-            'success' => false,
-            'message' => 'Failed to retry order submittal: ' . $res['message']
-        ], 400);
+            'success' => true,
+            'message' => 'Topup order dispatched to processing queue successfully.',
+            'data' => $order
+        ]);
     }
 
     public function syncG2BulkCatalog(Request $request)

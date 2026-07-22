@@ -7,10 +7,15 @@ use App\Repositories\Contracts\PaymentRepositoryInterface;
 use App\Repositories\Contracts\GameRepositoryInterface;
 use App\Repositories\Contracts\CouponRepositoryInterface;
 use App\Models\User;
+use App\Models\Order;
+use App\Models\Payment;
+use App\Enums\OrderStatus;
+use App\Jobs\ProcessTopupJob;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use App\Services\G2BulkService;
 
 class CheckoutService
 {
@@ -49,15 +54,14 @@ class CheckoutService
         ?string $couponCode
     ) {
         return DB::transaction(function () use ($user, $items, $paymentMethod, $transactionNo, $receiptFile, $couponCode) {
-            // Prevent duplicate/spam checkouts using the same transaction reference number
-            if (\App\Models\Payment::where('transaction_no', $transactionNo)->exists()) {
+            // Prevent duplicate checkouts using the same transaction reference number
+            if (Payment::where('transaction_no', $transactionNo)->exists()) {
                 throw new \Exception("This transaction number has already been used for another order.");
             }
 
             $totalSubtotal = 0.0;
-            
-            // 1. Process items and verify details
             $processedItems = [];
+
             foreach ($items as $item) {
                 $game = $this->gameRepository->find($item['game_id']);
                 if (!$game) {
@@ -69,10 +73,7 @@ class CheckoutService
                     throw new \Exception("Package not found.");
                 }
 
-                // Verify package stock availability on G2Bulk live wholesaler API
-                $this->verifyG2BulkStock($game, $package);
-
-                $itemSubtotal = (float)$package->price_usd * (int)$item['qty'];
+                $itemSubtotal = (float) $package->price_usd * (int) $item['qty'];
                 $totalSubtotal += $itemSubtotal;
 
                 $processedItems[] = [
@@ -81,14 +82,13 @@ class CheckoutService
                     'player_id' => $item['player_id'],
                     'server_id' => $item['server_id'] ?? null,
                     'qty' => $item['qty'],
-                    'price_usd' => (float)$package->price_usd,
-                    'price_khr' => (int)$package->price_khr,
+                    'price_usd' => (float) $package->price_usd,
+                    'price_khr' => (int) $package->price_khr,
                 ];
             }
 
-            // 2. Validate Coupon Code
+            // Validate Coupon Code
             $discount = 0.0;
-            $coupon = null;
             if ($couponCode) {
                 $coupon = $this->couponRepository->findByCode($couponCode);
                 if ($coupon && $coupon->isValidForAmount($totalSubtotal)) {
@@ -98,9 +98,9 @@ class CheckoutService
             }
 
             $totalUsd = max(0.0, $totalSubtotal - $discount);
-            $totalKhr = (int)Math_round($totalUsd * 4100);
+            $totalKhr = (int) round($totalUsd * 4100);
 
-            // 3. Upload Receipt File
+            // Upload Receipt File if provided
             $receiptPath = 'receipts/default.png';
             if ($receiptFile) {
                 $filename = time() . '_' . Str::random(10) . '.' . $receiptFile->getClientOriginalExtension();
@@ -108,12 +108,9 @@ class CheckoutService
             }
             $receiptUrl = Storage::url($receiptPath);
 
-            // 4. Create Order & Payment records (Supporting multiple items if shopping cart utilized, or first main item)
             $orderNo = 'ORD-' . strtoupper(Str::random(10));
-            
-            // For multi-item carts, we record each item under the same order number or list
-            $lastOrder = null;
             $isAutomated = ($paymentMethod === 'khqr_bakong');
+            $lastOrder = null;
 
             foreach ($processedItems as $pItem) {
                 $orderData = [
@@ -128,10 +125,10 @@ class CheckoutService
                     'qty' => $pItem['qty'],
                     'original_price_usd' => $pItem['price_usd'],
                     'price_usd' => $pItem['price_usd'],
-                    'discount_usd' => $discount, // Spread or record discount
+                    'discount_usd' => $discount,
                     'total_price_usd' => $totalUsd,
                     'total_price_khr' => $totalKhr,
-                    'status' => $isAutomated ? 'processing' : 'waiting_verification',
+                    'status' => $isAutomated ? OrderStatus::PAID : OrderStatus::PENDING_PAYMENT,
                     'payment_method' => $paymentMethod,
                     'coupon_code' => $couponCode,
                 ];
@@ -140,39 +137,8 @@ class CheckoutService
                 $lastOrder = $order;
 
                 if ($isAutomated) {
-                    // Automate top-up order via G2Bulk Wholesaler API
-                    try {
-                        $gameSlug = $pItem['game']->slug;
-                        $gameMapping = [
-                            'mobile-legends' => 'mlbb',
-                            'mobile-khmer' => 'mlbb',
-                            'free-fire' => 'freefire_global',
-                            'pubg-mobile' => 'pubgm',
-                            'valorant' => 'valorant_sg',
-                            'honor-of-kings' => 'hok',
-                            'roblox' => 'roblox',
-                        ];
-                        $gameCode = $gameMapping[$gameSlug] ?? 'mlbb';
-
-                        $res = $this->g2bulkService->placeOrder(
-                            $gameCode,
-                            $pItem['package']->name_en,
-                            $pItem['player_id'],
-                            $pItem['server_id'],
-                            $orderNo
-                        );
-
-                        if ($res['success']) {
-                            if (isset($res['order_id'])) {
-                                $order->g2b_order_id = $res['order_id'];
-                                $order->save();
-                            }
-                        } else {
-                            \Illuminate\Support\Facades\Log::warning("Automated G2Bulk placement failed for {$orderNo}: " . ($res['message'] ?? 'Unknown error'));
-                        }
-                    } catch (\Exception $ex) {
-                        \Illuminate\Support\Facades\Log::error("Automated G2Bulk exception for {$orderNo}: " . $ex->getMessage());
-                    }
+                    // Dispatch topup processing job onto Horizon topup queue
+                    ProcessTopupJob::dispatch($order->id)->onQueue('topup');
                 }
             }
 
@@ -188,16 +154,8 @@ class CheckoutService
             ];
             $this->paymentRepository->create($paymentData);
 
-            // 5. Send Telegram Notification Alert to Admins
-            $telegramMsg = "🔔 <b>New Top-Up Order Placed!</b>\n\n" .
-                "• <b>Order No:</b> <code>{$orderNo}</code>\n" .
-                "• <b>Customer:</b> " . ($user ? "{$user->name} ({$user->email})" : "Guest Customer") . "\n" .
-                "• <b>Payment Mode:</b> " . strtoupper(str_replace('_', ' ', $paymentMethod)) . "\n" .
-                "• <b>Ref Txn ID:</b> <code>{$transactionNo}</code>\n" .
-                "• <b>Total Amount:</b> \${$totalUsd} (" . number_format($totalKhr) . " KHR)\n" .
-                "• <b>Automation:</b> " . ($isAutomated ? "⚡ AUTO-VERIFIED & SENT TO G2BULK" : "✍️ MANUAL RECEIPT VERIFICATION REQUIRED") . "\n";
-
-            $this->telegramService->sendAdminAlert($telegramMsg);
+            // Send Telegram Notification
+            $this->telegramService->notifyPaymentSuccess($orderNo, $totalUsd, strtoupper(str_replace('_', ' ', $paymentMethod)));
 
             return $lastOrder;
         });
@@ -220,10 +178,7 @@ class CheckoutService
                 throw new \Exception("Package not found.");
             }
 
-            // Verify package stock availability on G2Bulk live wholesaler API
-            $this->verifyG2BulkStock($game, $package);
-
-            $itemSubtotal = (float)$package->price_usd * (int)$item['qty'];
+            $itemSubtotal = (float) $package->price_usd * (int) $item['qty'];
             $totalSubtotal += $itemSubtotal;
         }
 
@@ -238,12 +193,13 @@ class CheckoutService
         $totalUsd = max(0.01, $totalSubtotal - $discount);
         $totalUsdFormatted = number_format($totalUsd, 2, '.', '');
 
-        $baseUrl = env('KHQR_API_BASE_URL', 'https://api.khqr.link');
-        $token = env('KHQR_API_TOKEN');
-        $bakongId = env('KHQR_BAKONG_ACCOUNT_ID');
-        $merchantName = env('KHQR_ACCOUNT_NAME', 'V-TOPUP-STORE CO., LTD.');
+        $baseUrl = (string) config('services.khqr.base_url', 'https://api.khqr.link');
+        $token = (string) config('services.khqr.token');
+        $bakongId = (string) config('services.khqr.bakong_account_id');
+        $merchantName = (string) config('services.khqr.merchant_name', 'V-TOPUP-STORE CO., LTD.');
 
-        $response = \Illuminate\Support\Facades\Http::withToken($token)
+        $response = Http::timeout(8)
+            ->withToken($token)
             ->get("{$baseUrl}/v1/khqr/create", [
                 'amount' => $totalUsdFormatted,
                 'bakongid' => $bakongId,
@@ -262,10 +218,11 @@ class CheckoutService
      */
     public function checkKhqrStatus(string $md5)
     {
-        $baseUrl = env('KHQR_API_BASE_URL', 'https://api.khqr.link');
-        $token = env('KHQR_API_TOKEN');
+        $baseUrl = (string) config('services.khqr.base_url', 'https://api.khqr.link');
+        $token = (string) config('services.khqr.token');
 
-        $response = \Illuminate\Support\Facades\Http::withToken($token)
+        $response = Http::timeout(8)
+            ->withToken($token)
             ->get("{$baseUrl}/v1/khqr/check", [
                 'md5' => $md5,
             ]);
@@ -274,23 +231,26 @@ class CheckoutService
             throw new \Exception("Failed to verify payment status: " . $response->body());
         }
 
-        return $response->json();
-    }
+        $json = $response->json();
 
-    /**
-     * Check if a game package is available in the live G2Bulk catalogue.
-     *
-     * @throws \Exception
-     */
-    protected function verifyG2BulkStock($game, $package): void
-    {
-        return;
-    }
-}
+        // If payment verified on KHQR gateway, find associated order and dispatch topup job
+        if (isset($json['responseCode']) && (int) $json['responseCode'] === 0) {
+            $payment = Payment::where('transaction_no', $md5)->first();
+            if ($payment && $payment->status !== 'verified') {
+                $payment->status = 'verified';
+                $payment->save();
 
-// Math_round helper fallback if not exists
-if (!function_exists('App\Services\Math_round')) {
-    function Math_round($val) {
-        return round($val);
+                $orders = Order::where('order_no', $payment->order_no)->get();
+                foreach ($orders as $order) {
+                    if ($order->status === OrderStatus::PENDING_PAYMENT) {
+                        $order->status = OrderStatus::PAID;
+                        $order->save();
+                        ProcessTopupJob::dispatch($order->id)->onQueue('topup');
+                    }
+                }
+            }
+        }
+
+        return $json;
     }
 }

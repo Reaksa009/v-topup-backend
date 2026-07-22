@@ -27,7 +27,26 @@ Route::get('/health', function () {
         $redisActive = 'error: ' . $e->getMessage();
     }
 
-    $isHealthy = (str_contains($mongoActive, 'connected') && str_contains($redisActive, 'connected'));
+    try {
+        $queueDriver = config('queue.default');
+        $queueActive = !empty($queueDriver) ? 'connected' : 'error';
+    } catch (\Exception $e) {
+        $queueActive = 'error: ' . $e->getMessage();
+    }
+
+    try {
+        $g2bService = app(\App\Services\G2BulkService::class);
+        $g2bRes = $g2bService->getWalletBalance();
+        $g2bActive = $g2bRes['success'] ? 'connected' : 'degraded';
+    } catch (\Exception $e) {
+        $g2bActive = 'error: ' . $e->getMessage();
+    }
+
+    $isHealthy = (
+        str_contains($mongoActive, 'connected') &&
+        str_contains($redisActive, 'connected') &&
+        str_contains($queueActive, 'connected')
+    );
 
     return response()->json([
         'status' => $isHealthy ? 'healthy' : 'degraded',
@@ -35,6 +54,8 @@ Route::get('/health', function () {
         'services' => [
             'mongodb' => $mongoActive,
             'redis' => $redisActive,
+            'queue' => $queueActive,
+            'g2bulk' => $g2bActive,
         ]
     ], $isHealthy ? 200 : 500);
 });

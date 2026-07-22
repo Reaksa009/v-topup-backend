@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 use App\Models\ApiLog;
 
 class G2BulkService
@@ -13,38 +14,53 @@ class G2BulkService
 
     public function __construct()
     {
-        $this->apiKey = env('G2BULK_API_KEY', '5fdcdd6b1a6d04645af01f89d21cd68a55b839ae8b36308f1ccab8f6cf982bfe');
-        $this->baseUrl = 'https://api.g2bulk.com/v1';
+        $this->apiKey = (string) config('services.g2bulk.api_key');
+        $this->baseUrl = (string) config('services.g2bulk.base_url', 'https://api.g2bulk.com/v1');
     }
 
     /**
-     * Log the API transaction to MongoDB.
+     * Log structured transaction to MongoDB api_logs collection.
      */
-    protected function logTransaction(string $url, string $method, $payload, $response, int $statusCode, ?string $error = null)
-    {
+    protected function logTransaction(
+        string $url,
+        string $method,
+        $payload,
+        $response,
+        int $statusCode,
+        int $latencyMs,
+        ?string $error = null,
+        ?string $orderNo = null,
+        ?string $playerId = null
+    ): void {
         try {
+            $requestId = request()->header('X-Request-ID') ?? (string) \Illuminate\Support\Str::uuid();
+
             ApiLog::create([
+                'request_id' => $requestId,
+                'order_no' => $orderNo,
+                'player_id' => $playerId,
+                'provider' => 'G2Bulk',
                 'url' => $url,
                 'method' => $method,
                 'payload' => is_array($payload) ? $payload : (json_decode($payload, true) ?: ['raw' => $payload]),
                 'response' => is_array($response) ? $response : (json_decode($response, true) ?: ['raw' => $response]),
                 'status_code' => $statusCode,
+                'latency_ms' => $latencyMs,
                 'error' => $error,
                 'ip_address' => request()->ip(),
             ]);
         } catch (\Exception $e) {
-            Log::error('Failed to save API Log to MongoDB: ' . $e->getMessage());
+            Log::error('Failed to write ApiLog to MongoDB: ' . $e->getMessage());
         }
     }
 
     /**
-     * Validate Player ID.
+     * Verify Player ID.
      */
     public function checkPlayerId(string $gameCode, string $playerId, ?string $serverId): array
     {
         $url = "{$this->baseUrl}/games/checkPlayerId";
-        
-        // G2Bulk Free Fire verification requires region code, freefire_sg covers global accounts
+
         if ($gameCode === 'freefire_global') {
             $gameCode = 'freefire_sg';
         }
@@ -56,51 +72,85 @@ class G2BulkService
             'charname' => '',
         ];
 
-        try {
-            $response = Http::withHeaders([
-                'X-API-Key' => $this->apiKey,
-                'Content-Type' => 'application/json',
-                'Accept' => 'application/json',
-            ])->timeout(8)->post($url, $payload);
+        $startTime = microtime(true);
 
-            $resBody = $response->json();
+        try {
+            $response = Http::retry(3, 1000)
+                ->timeout(10)
+                ->withHeaders([
+                    'X-API-Key' => $this->apiKey,
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
+                ])->post($url, $payload);
+
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $resBody = $response->json() ?? [];
             $statusCode = $response->status();
 
-            $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode);
+            $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode, $latencyMs, null, null, $playerId);
 
             if ($response->successful() && isset($resBody['valid']) && $resBody['valid'] === 'valid') {
                 return [
                     'success' => true,
-                    'nickname' => $resBody['name'] ?? 'Verified Account'
+                    'code' => 'SUCCESS',
+                    'message' => 'Player details verified.',
+                    'nickname' => $resBody['name'] ?? 'Verified Account',
+                    'data' => $resBody,
+                    'latency_ms' => $latencyMs,
+                    'http_status' => $statusCode,
                 ];
             }
 
+            $message = $resBody['message'] ?? 'Invalid player details or game mapping.';
             return [
                 'success' => false,
-                'message' => $resBody['message'] ?? 'Invalid player details or game mapping.'
+                'code' => 'INVALID_PLAYER',
+                'message' => $message,
+                'data' => $resBody,
+                'latency_ms' => $latencyMs,
+                'http_status' => $statusCode,
+            ];
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $this->logTransaction($url, 'POST', $payload, null, 504, $latencyMs, $e->getMessage(), null, $playerId);
+
+            return [
+                'success' => false,
+                'code' => 'TIMEOUT',
+                'message' => 'Connection to player validation gateway timed out.',
+                'data' => null,
+                'latency_ms' => $latencyMs,
+                'http_status' => 504,
             ];
         } catch (\Exception $e) {
-            Log::error("G2Bulk checkPlayerId exception: " . $e->getMessage());
-            $this->logTransaction($url, 'POST', $payload, null, 500, $e->getMessage());
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $this->logTransaction($url, 'POST', $payload, null, 500, $latencyMs, $e->getMessage(), null, $playerId);
+
             return [
                 'success' => false,
-                'message' => 'Connection to validation gateway timed out.'
+                'code' => 'ERROR',
+                'message' => 'Player validation error: ' . $e->getMessage(),
+                'data' => null,
+                'latency_ms' => $latencyMs,
+                'http_status' => 500,
             ];
         }
     }
 
     /**
-     * Place Order.
+     * Submit Topup Order.
      */
     public function placeOrder(string $gameCode, string $catalogueName, string $playerId, ?string $serverId, string $orderNo): array
     {
-        // Resolve and normalize database package name (e.g. "86 Diamond") to G2Bulk catalog name (e.g. "86")
+        // 1. Resolve catalog name
         try {
             $catUrl = "{$this->baseUrl}/games/{$gameCode}/catalogue";
-            $catRes = Http::withHeaders([
-                'X-API-Key' => $this->apiKey,
-                'Accept' => 'application/json',
-            ])->timeout(6)->get($catUrl);
+            $catRes = Http::retry(2, 500)
+                ->timeout(8)
+                ->withHeaders([
+                    'X-API-Key' => $this->apiKey,
+                    'Accept' => 'application/json',
+                ])->get($catUrl);
 
             if ($catRes->successful() && isset($catRes->json()['catalogues'])) {
                 $dbName = strtolower(trim($catalogueName));
@@ -125,15 +175,16 @@ class G2BulkService
                     }
 
                     if ($isMatch) {
-                        $catalogueName = $cat['name']; // Set resolved name
+                        $catalogueName = $cat['name'];
                         break;
                     }
                 }
             }
         } catch (\Exception $e) {
-            Log::warning("G2Bulk catalogue resolution failed: " . $e->getMessage());
+            Log::warning("G2Bulk catalogue resolution error for {$orderNo}: " . $e->getMessage());
         }
 
+        // 2. Submit order to G2Bulk
         $url = "{$this->baseUrl}/games/{$gameCode}/order";
         $payload = [
             'catalogue_name' => $catalogueName,
@@ -141,131 +192,229 @@ class G2BulkService
             'server_id' => $serverId ?: '',
             'charname' => '',
             'remark' => 'Order No: ' . $orderNo,
-            'callback_url' => url('/api/webhooks/g2bulk'),
+            'callback_url' => url('/api/v1/webhooks/g2bulk'),
         ];
 
-        try {
-            $response = Http::withHeaders([
-                'X-API-Key' => $this->apiKey,
-                'Content-Type' => 'application/json',
-                'Accept' => 'application/json',
-            ])->timeout(12)->post($url, $payload);
+        $startTime = microtime(true);
 
-            $resBody = $response->json();
+        try {
+            $response = Http::retry(3, 1000)
+                ->timeout(12)
+                ->withHeaders([
+                    'X-API-Key' => $this->apiKey,
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
+                ])->post($url, $payload);
+
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $resBody = $response->json() ?? [];
             $statusCode = $response->status();
 
-            $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode);
+            $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode, $latencyMs, null, $orderNo, $playerId);
 
             if ($response->successful()) {
                 return [
                     'success' => true,
-                    'order_id' => $resBody['order']['order_id'] ?? null,
-                    'message' => 'Order submitted to G2Bulk successfully.'
+                    'code' => 'SUCCESS',
+                    'message' => 'Order submitted to G2Bulk successfully.',
+                    'data' => [
+                        'order_id' => $resBody['order']['order_id'] ?? null,
+                    ],
+                    'latency_ms' => $latencyMs,
+                    'http_status' => $statusCode,
+                ];
+            }
+
+            $rawMsg = strtolower($resBody['message'] ?? '');
+
+            // Out of stock detection
+            if (str_contains($rawMsg, 'stock') || str_contains($rawMsg, 'insufficient') || str_contains($rawMsg, 'unavailable')) {
+                return [
+                    'success' => false,
+                    'code' => 'OUT_OF_STOCK',
+                    'message' => $resBody['message'] ?? 'Wholesaler package is currently out of stock.',
+                    'data' => $resBody,
+                    'latency_ms' => $latencyMs,
+                    'http_status' => $statusCode,
+                ];
+            }
+
+            // Invalid player detection
+            if (str_contains($rawMsg, 'invalid') || str_contains($rawMsg, 'user not found') || str_contains($rawMsg, 'character')) {
+                return [
+                    'success' => false,
+                    'code' => 'INVALID_PLAYER',
+                    'message' => $resBody['message'] ?? 'Invalid player ID or server ID.',
+                    'data' => $resBody,
+                    'latency_ms' => $latencyMs,
+                    'http_status' => $statusCode,
+                ];
+            }
+
+            // Duplicate order detection
+            if (str_contains($rawMsg, 'duplicate') || str_contains($rawMsg, 'already exists')) {
+                return [
+                    'success' => false,
+                    'code' => 'DUPLICATE_ORDER',
+                    'message' => $resBody['message'] ?? 'Duplicate order submission detected.',
+                    'data' => $resBody,
+                    'latency_ms' => $latencyMs,
+                    'http_status' => $statusCode,
                 ];
             }
 
             return [
                 'success' => false,
-                'message' => $resBody['message'] ?? 'Failed to submit order to G2Bulk wholesaler.'
+                'code' => 'ERROR',
+                'message' => $resBody['message'] ?? 'Failed to submit order to G2Bulk wholesaler.',
+                'data' => $resBody,
+                'latency_ms' => $latencyMs,
+                'http_status' => $statusCode,
             ];
-        } catch (\Exception $e) {
-            Log::error("G2Bulk placeOrder exception: " . $e->getMessage());
-            $this->logTransaction($url, 'POST', $payload, null, 500, $e->getMessage());
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $this->logTransaction($url, 'POST', $payload, null, 504, $latencyMs, $e->getMessage(), $orderNo, $playerId);
+
             return [
                 'success' => false,
-                'message' => 'Connection to wholesaler order placement timed out.'
+                'code' => 'TIMEOUT',
+                'message' => 'Connection to G2Bulk order gateway timed out.',
+                'data' => null,
+                'latency_ms' => $latencyMs,
+                'http_status' => 504,
+            ];
+        } catch (\Exception $e) {
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $this->logTransaction($url, 'POST', $payload, null, 500, $latencyMs, $e->getMessage(), $orderNo, $playerId);
+
+            return [
+                'success' => false,
+                'code' => 'ERROR',
+                'message' => 'Order placement exception: ' . $e->getMessage(),
+                'data' => null,
+                'latency_ms' => $latencyMs,
+                'http_status' => 500,
             ];
         }
     }
 
     /**
-     * Check Order Status.
+     * Check Order Status on G2Bulk.
      */
     public function checkOrderStatus(string $g2bOrderId): array
     {
         $url = "{$this->baseUrl}/games/order/status";
         $payload = [
-            'order_id' => (int)$g2bOrderId
+            'order_id' => (int) $g2bOrderId,
         ];
 
-        try {
-            $response = Http::withHeaders([
-                'X-API-Key' => $this->apiKey,
-                'Content-Type' => 'application/json',
-                'Accept' => 'application/json',
-            ])->timeout(8)->post($url, $payload);
+        $startTime = microtime(true);
 
-            $resBody = $response->json();
+        try {
+            $response = Http::retry(3, 1000)
+                ->timeout(8)
+                ->withHeaders([
+                    'X-API-Key' => $this->apiKey,
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
+                ])->post($url, $payload);
+
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $resBody = $response->json() ?? [];
             $statusCode = $response->status();
 
-            $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode);
+            $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode, $latencyMs);
 
             if ($response->successful()) {
                 return [
                     'success' => true,
+                    'code' => 'SUCCESS',
                     'status' => $resBody['status'] ?? 'processing',
                     'remark' => $resBody['remark'] ?? '',
+                    'data' => $resBody,
+                    'latency_ms' => $latencyMs,
+                    'http_status' => $statusCode,
                 ];
             }
 
             return [
                 'success' => false,
-                'message' => 'Failed to check order status.'
+                'code' => 'ERROR',
+                'message' => $resBody['message'] ?? 'Failed to check order status.',
+                'data' => $resBody,
+                'latency_ms' => $latencyMs,
+                'http_status' => $statusCode,
             ];
         } catch (\Exception $e) {
-            Log::error("G2Bulk checkOrderStatus exception: " . $e->getMessage());
-            $this->logTransaction($url, 'POST', $payload, null, 500, $e->getMessage());
+            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+            $this->logTransaction($url, 'POST', $payload, null, 500, $latencyMs, $e->getMessage());
+
             return [
                 'success' => false,
-                'message' => 'Connection to status gateway timed out.'
+                'code' => 'ERROR',
+                'message' => 'Status check exception: ' . $e->getMessage(),
+                'data' => null,
+                'latency_ms' => $latencyMs,
+                'http_status' => 500,
             ];
         }
     }
 
     /**
-     * Get Wallet Balance.
+     * Get Wallet Balance (with Redis Caching).
      */
     public function getWalletBalance(): array
     {
-        $url = "{$this->baseUrl}/getMe";
+        return Cache::remember('g2bulk_wallet_balance', 300, function () {
+            $url = "{$this->baseUrl}/getMe";
+            $startTime = microtime(true);
 
-        try {
-            $response = Http::withHeaders([
-                'X-API-Key' => $this->apiKey,
-                'Accept' => 'application/json',
-            ])->timeout(8)->get($url);
+            try {
+                $response = Http::retry(2, 500)
+                    ->timeout(8)
+                    ->withHeaders([
+                        'X-API-Key' => $this->apiKey,
+                        'Accept' => 'application/json',
+                    ])->get($url);
 
-            $resBody = $response->json();
-            $statusCode = $response->status();
+                $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+                $resBody = $response->json() ?? [];
+                $statusCode = $response->status();
 
-            // Log this action to MongoDB
-            $this->logTransaction($url, 'GET', [], $resBody, $statusCode);
+                $this->logTransaction($url, 'GET', [], $resBody, $statusCode, $latencyMs);
 
-            if ($response->successful() && isset($resBody['success']) && $resBody['success']) {
+                if ($response->successful() && isset($resBody['success']) && $resBody['success']) {
+                    return [
+                        'success' => true,
+                        'code' => 'SUCCESS',
+                        'balance' => (float) ($resBody['balance'] ?? 0.0),
+                        'currency' => 'USD',
+                        'username' => $resBody['username'] ?? '',
+                        'latency_ms' => $latencyMs,
+                    ];
+                }
+
                 return [
                     'success' => true,
-                    'balance' => (float)($resBody['balance'] ?? 0.0),
+                    'code' => 'MOCK',
+                    'balance' => 384.50,
                     'currency' => 'USD',
-                    'username' => $resBody['username'] ?? '',
+                    'is_mocked' => true,
+                    'latency_ms' => $latencyMs,
+                ];
+            } catch (\Exception $e) {
+                $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+                $this->logTransaction($url, 'GET', [], null, 500, $latencyMs, $e->getMessage());
+
+                return [
+                    'success' => true,
+                    'code' => 'MOCK',
+                    'balance' => 384.50,
+                    'currency' => 'USD',
+                    'is_mocked' => true,
+                    'latency_ms' => $latencyMs,
                 ];
             }
-
-            // Fallback for mock if connection fails during development
-            return [
-                'success' => true,
-                'balance' => 384.50, // Deterministic mock for balance
-                'currency' => 'USD',
-                'is_mocked' => true
-            ];
-        } catch (\Exception $e) {
-            Log::error("G2Bulk getWalletBalance exception: " . $e->getMessage());
-            $this->logTransaction($url, 'GET', [], null, 500, $e->getMessage());
-            return [
-                'success' => true,
-                'balance' => 384.50,
-                'currency' => 'USD',
-                'is_mocked' => true
-            ];
-        }
+        });
     }
 }

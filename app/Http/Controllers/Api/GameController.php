@@ -4,20 +4,26 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use App\Repositories\Contracts\GameRepositoryInterface;
 use App\Repositories\Contracts\CategoryRepositoryInterface;
+use App\Services\G2BulkService;
+use App\Enums\OrderStatus;
+use App\Models\ApiLog;
+use App\Models\Order;
+use App\Models\News;
 
 class GameController extends Controller
 {
     protected GameRepositoryInterface $gameRepository;
     protected CategoryRepositoryInterface $categoryRepository;
-    protected \App\Services\G2BulkService $g2bulkService;
+    protected G2BulkService $g2bulkService;
 
     public function __construct(
         GameRepositoryInterface $gameRepository,
         CategoryRepositoryInterface $categoryRepository,
-        \App\Services\G2BulkService $g2bulkService
+        G2BulkService $g2bulkService
     ) {
         $this->gameRepository = $gameRepository;
         $this->categoryRepository = $categoryRepository;
@@ -26,9 +32,10 @@ class GameController extends Controller
 
     public function index()
     {
-        $games = \Illuminate\Support\Facades\Cache::remember('active_games', 3600, function () {
+        $games = Cache::remember('active_games', 3600, function () {
             return $this->gameRepository->allActive();
         });
+
         return response()->json([
             'success' => true,
             'data' => $games
@@ -37,9 +44,10 @@ class GameController extends Controller
 
     public function categories()
     {
-        $categories = \Illuminate\Support\Facades\Cache::remember('active_categories', 3600, function () {
+        $categories = Cache::remember('active_categories', 3600, function () {
             return $this->categoryRepository->allActive();
         });
+
         return response()->json([
             'success' => true,
             'data' => $categories
@@ -48,10 +56,10 @@ class GameController extends Controller
 
     public function show($slug)
     {
-        $game = \Illuminate\Support\Facades\Cache::remember("game_detail_{$slug}", 3600, function () use ($slug) {
+        $game = Cache::remember("game_detail_{$slug}", 3600, function () use ($slug) {
             return $this->gameRepository->findBySlug($slug);
         });
-        
+
         if (!$game) {
             return response()->json([
                 'success' => false,
@@ -80,9 +88,10 @@ class GameController extends Controller
 
     public function popular()
     {
-        $games = \Illuminate\Support\Facades\Cache::remember('popular_games', 3600, function () {
+        $games = Cache::remember('popular_games', 3600, function () {
             return $this->gameRepository->getPopular(5);
         });
+
         return response()->json([
             'success' => true,
             'data' => $games
@@ -91,9 +100,10 @@ class GameController extends Controller
 
     public function featured()
     {
-        $games = \Illuminate\Support\Facades\Cache::remember('featured_games', 3600, function () {
+        $games = Cache::remember('featured_games', 3600, function () {
             return $this->gameRepository->getFeatured(5);
         });
+
         return response()->json([
             'success' => true,
             'data' => $games
@@ -102,7 +112,7 @@ class GameController extends Controller
 
     public function getSettings()
     {
-        $settings = \Illuminate\Support\Facades\Cache::remember('system_settings_cache', 3600, function () {
+        $settings = Cache::remember('system_settings_cache', 3600, function () {
             $path = storage_path('app/settings.json');
             if (!file_exists($path)) {
                 $settingsData = [
@@ -139,7 +149,6 @@ class GameController extends Controller
         $game = \App\Models\Game::find($gameId);
         $gameSlug = $game ? $game->slug : 'mobile-legends';
 
-        // Map frontend slug to G2Bulk game code
         $gameMapping = [
             'mobile-legends' => 'mlbb',
             'mobile-khmer' => 'mlbb',
@@ -152,6 +161,7 @@ class GameController extends Controller
         $gameCode = $gameMapping[$gameSlug] ?? 'mlbb';
 
         $res = $this->g2bulkService->checkPlayerId($gameCode, $playerId, $serverId);
+
         if ($res['success']) {
             return response()->json([
                 'success' => true,
@@ -161,7 +171,7 @@ class GameController extends Controller
 
         return response()->json([
             'success' => false,
-            'message' => 'Player not found.'
+            'message' => $res['message'] ?? 'Player not found.'
         ], 404);
     }
 
@@ -170,32 +180,45 @@ class GameController extends Controller
         $status = $request->input('status');
         $remark = $request->input('remark');
 
-        // Log incoming webhook call
+        // Log incoming webhook
         try {
-            \App\Models\ApiLog::create([
+            ApiLog::create([
+                'request_id' => request()->header('X-Request-ID') ?? (string) \Illuminate\Support\Str::uuid(),
+                'provider' => 'G2Bulk-Webhook',
                 'url' => request()->fullUrl(),
                 'method' => 'POST',
                 'payload' => $request->all(),
                 'response' => ['success' => true, 'logged' => true],
                 'status_code' => 200,
+                'latency_ms' => 0,
                 'ip_address' => $request->ip(),
             ]);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Failed to log G2Bulk Webhook: ' . $e->getMessage());
+            Log::error('Failed to log G2Bulk Webhook: ' . $e->getMessage());
         }
 
         // Extract order number from remark (e.g. "Order No: ORD-XXXXXX")
-        preg_match('/ORD-[A-Z0-9]+/', $remark, $matches);
-        $orderNo = isset($matches[0]) ? $matches[0] : null;
+        preg_match('/ORD-[A-Z0-9]+/', (string) $remark, $matches);
+        $orderNo = $matches[0] ?? null;
 
         if ($orderNo) {
-            $order = \App\Models\Order::where('order_no', $orderNo)->first();
+            $order = Order::where('order_no', $orderNo)->first();
             if ($order) {
-                if (strtoupper($status) === 'COMPLETED' || strtoupper($status) === 'SUCCESS') {
-                    $order->status = 'completed';
-                } elseif (strtoupper($status) === 'FAILED' || strtoupper($status) === 'CANCELLED') {
-                    $order->status = 'cancelled';
+                // Prevent duplicate webhook updates if order is already completed
+                if ($order->status === OrderStatus::COMPLETED) {
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Order is already marked as completed. Duplicate webhook ignored.'
+                    ]);
                 }
+
+                $upperStatus = strtoupper((string) $status);
+                if ($upperStatus === 'COMPLETED' || $upperStatus === 'SUCCESS') {
+                    $order->status = OrderStatus::COMPLETED;
+                } elseif ($upperStatus === 'FAILED' || $upperStatus === 'CANCELLED') {
+                    $order->status = OrderStatus::CANCELLED;
+                }
+
                 $order->save();
 
                 return response()->json([
@@ -213,8 +236,8 @@ class GameController extends Controller
 
     public function latestNews()
     {
-        $news = \Illuminate\Support\Facades\Cache::remember('latest_news', 3600, function () {
-            return \App\Models\News::where('is_published', true)
+        $news = Cache::remember('latest_news', 3600, function () {
+            return News::where('is_published', true)
                 ->orderBy('created_at', 'desc')
                 ->limit(5)
                 ->get();
