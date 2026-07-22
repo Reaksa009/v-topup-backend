@@ -56,7 +56,12 @@ class GameController extends Controller
 
     public function show($slug)
     {
-        $game = $this->gameRepository->findBySlug($slug);
+        $cleanSlug = str_replace([' ', '%20'], '-', trim(strtolower($slug)));
+        $game = $this->gameRepository->findBySlug($cleanSlug);
+
+        if (!$game) {
+            $game = $this->gameRepository->findBySlug($slug);
+        }
 
         if (!$game) {
             return response()->json([
