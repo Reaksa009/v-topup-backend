@@ -151,6 +151,18 @@ class G2BulkService
             ];
         }
 
+        // 0.1 Circuit Breaker: Block requests when G2Bulk wallet balance is $0.00
+        $walletRes = $this->getWalletBalance();
+        if (isset($walletRes['balance']) && (float)$walletRes['balance'] <= 0.0) {
+            Log::warning("Circuit breaker activated: G2Bulk wallet balance is $0.00. Order {$orderNo} submission blocked.");
+            return [
+                'success' => false,
+                'code' => 'PROVIDER_UNAVAILABLE',
+                'message' => 'Top-up service is temporarily unavailable due to provider maintenance. Please try again later.',
+                'status_code' => 503,
+            ];
+        }
+
         // 1. Normalize provider game code mapping
         $gameMapping = [
             'mobile-legends' => 'mlbb',
@@ -326,11 +338,16 @@ class G2BulkService
     }
 
     /**
-     * Get Wallet Balance (with Redis Caching).
+     * Get Wallet Balance with Redis 5-min caching and MongoDB trend tracking.
      */
-    public function getWalletBalance(): array
+    public function getWalletBalance(bool $forceRefresh = false): array
     {
-        return Cache::remember('g2bulk_wallet_balance', 300, function () {
+        $cacheKey = 'g2bulk_wallet_balance';
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        return Cache::remember($cacheKey, 300, function () {
             $url = "{$this->baseUrl}/getMe";
             $startTime = microtime(true);
 
@@ -349,22 +366,42 @@ class G2BulkService
                 $this->logTransaction($url, 'GET', [], $resBody, $statusCode, $latencyMs);
 
                 if ($response->successful() && isset($resBody['success']) && $resBody['success']) {
+                    $balance = (float) ($resBody['balance'] ?? 0.0);
+                    $status = $balance <= 0 ? 'CRITICAL' : ($balance < (float) config('services.g2bulk.low_balance_threshold', 20.0) ? 'LOW' : 'OK');
+
+                    // Save balance snapshot history to MongoDB for trend reporting
+                    try {
+                        \App\Models\WalletBalance::create([
+                            'provider' => 'g2bulk',
+                            'balance' => $balance,
+                            'currency' => 'USD',
+                            'status' => $status,
+                            'raw_response' => [
+                                'user_id' => $resBody['user_id'] ?? null,
+                                'username' => $resBody['username'] ?? '',
+                            ],
+                        ]);
+                    } catch (\Exception $e) {
+                        Log::warning("Failed to save WalletBalance history: " . $e->getMessage());
+                    }
+
                     return [
                         'success' => true,
                         'code' => 'SUCCESS',
-                        'balance' => (float) ($resBody['balance'] ?? 0.0),
+                        'balance' => $balance,
                         'currency' => 'USD',
+                        'status' => $status,
                         'username' => $resBody['username'] ?? '',
                         'latency_ms' => $latencyMs,
                     ];
                 }
 
                 return [
-                    'success' => true,
-                    'code' => 'MOCK',
-                    'balance' => 384.50,
+                    'success' => false,
+                    'code' => 'PROVIDER_ERROR',
+                    'balance' => 0.0,
                     'currency' => 'USD',
-                    'is_mocked' => true,
+                    'status' => 'CRITICAL',
                     'latency_ms' => $latencyMs,
                 ];
             } catch (\Exception $e) {
@@ -372,11 +409,11 @@ class G2BulkService
                 $this->logTransaction($url, 'GET', [], null, 500, $latencyMs, $e->getMessage());
 
                 return [
-                    'success' => true,
-                    'code' => 'MOCK',
-                    'balance' => 384.50,
+                    'success' => false,
+                    'code' => 'NETWORK_ERROR',
+                    'balance' => 0.0,
                     'currency' => 'USD',
-                    'is_mocked' => true,
+                    'status' => 'CRITICAL',
                     'latency_ms' => $latencyMs,
                 ];
             }

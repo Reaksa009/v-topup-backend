@@ -803,9 +803,12 @@ class AdminController extends Controller
     public function walletBalance()
     {
         $balanceInfo = $this->g2bulkService->getWalletBalance();
+        $history = \App\Models\WalletBalance::orderBy('_id', 'desc')->take(20)->get();
+
         return response()->json([
             'success' => true,
-            'data' => $balanceInfo
+            'data' => $balanceInfo,
+            'history' => $history,
         ]);
     }
 

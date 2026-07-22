@@ -99,6 +99,30 @@ class TelegramNotificationService
     }
 
     /**
+     * Helper notification: Low Provider Balance Warning
+     */
+    public function notifyLowBalance(float $currentBalance, float $thresholdUsd): bool
+    {
+        $msg = "⚠️ <b>G2Bulk Low Balance Warning!</b>\n\n" .
+               "• <b>Current Balance:</b> \$" . number_format($currentBalance, 2) . "\n" .
+               "• <b>Threshold Alert:</b> \$" . number_format($thresholdUsd, 2) . "\n" .
+               "• <b>Action Required:</b> Deposit funds into G2Bulk wholesaler wallet soon to avoid service interruption.";
+        return $this->sendAdminAlert($msg);
+    }
+
+    /**
+     * Helper notification: Zero Provider Balance Critical Alert
+     */
+    public function notifyZeroBalance(float $currentBalance): bool
+    {
+        $msg = "🚨 <b>CRITICAL: G2Bulk Balance Exhausted ($0.00)!</b>\n\n" .
+               "• <b>Current Balance:</b> \$" . number_format($currentBalance, 2) . "\n" .
+               "• <b>Status:</b> CIRCUIT BREAKER ACTIVATED. All G2Bulk automated order submissions paused.\n" .
+               "• <b>Action Required:</b> Immediately deposit funds on G2Bulk.com to resume automated fulfillment.";
+        return $this->sendAdminAlert($msg);
+    }
+
+    /**
      * Helper notification: Provider API Down
      */
     public function notifyApiDown(string $providerName, string $endpoint, string $errorDetails): bool
