@@ -91,6 +91,26 @@ class DatabaseSeeder extends Seeder
             'status' => true
         ]);
 
+        // Mobile Legends Global
+        $gameMLGlobal = Game::create([
+            'category_id' => $catMobile->id,
+            'name_en' => 'Mobile Legends Global',
+            'name_kh' => 'ម៉ូបាលលីជិន Global',
+            'slug' => 'mobile-legends-global',
+            'logo_url' => 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=300&auto=format&fit=crop&q=80',
+            'banner_url' => 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
+            'description_en' => 'Enter player ID and server ID to purchase Global diamonds or Weekly Diamond Pass.',
+            'description_kh' => 'បញ្ចូលលេខសម្គាល់អ្នកលេង និងលេខម៉ាស៊ីនបម្រើ ដើម្បីទិញពេជ្រ ឬសំបុត្រប្រចាំសប្តាហ៍ Global។',
+            'player_id_label_en' => 'Player ID',
+            'player_id_label_kh' => 'លេខសម្គាល់អ្នកលេង (Player ID)',
+            'server_id_required' => true,
+            'server_id_label_en' => 'Server ID',
+            'server_id_label_kh' => 'លេខម៉ាស៊ីនបម្រើ (Server ID)',
+            'is_popular' => true,
+            'is_featured' => true,
+            'status' => true
+        ]);
+
         // Free Fire
         $gameFF = Game::create([
             'category_id' => $catMobile->id,
@@ -365,6 +385,24 @@ class DatabaseSeeder extends Seeder
         foreach ($khmerPackages as $pkg) {
             Package::create([
                 'game_id' => $gameKhmer->id,
+                'name_en' => $pkg['name_en'],
+                'name_kh' => $pkg['name_kh'],
+                'price_usd' => $pkg['price_usd'],
+                'price_khr' => round($pkg['price_usd'] * 4100),
+                'points_or_diamonds' => $pkg['points'],
+                'is_active' => true
+            ]);
+            Package::create([
+                'game_id' => $gameML->id,
+                'name_en' => $pkg['name_en'],
+                'name_kh' => $pkg['name_kh'],
+                'price_usd' => $pkg['price_usd'],
+                'price_khr' => round($pkg['price_usd'] * 4100),
+                'points_or_diamonds' => $pkg['points'],
+                'is_active' => true
+            ]);
+            Package::create([
+                'game_id' => $gameMLGlobal->id,
                 'name_en' => $pkg['name_en'],
                 'name_kh' => $pkg['name_kh'],
                 'price_usd' => $pkg['price_usd'],
