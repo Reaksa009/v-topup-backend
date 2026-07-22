@@ -812,6 +812,40 @@ class AdminController extends Controller
         ]);
     }
 
+    public function providerQueue(Request $request)
+    {
+        $waitingOrders = \App\Models\Order::where('status', \App\Enums\OrderStatus::WAITING_PROVIDER_BALANCE)
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        $oldestOrder = $waitingOrders->first();
+        $oldestWaitingTime = $oldestOrder ? $oldestOrder->created_at->diffForHumans() : 'No waiting orders';
+
+        $balanceInfo = $this->g2bulkService->getWalletBalance();
+        $balance = (float)($balanceInfo['balance'] ?? 0.0);
+
+        $providerStatus = 'HEALTHY';
+        if (!$balanceInfo['success']) {
+            $providerStatus = 'OFFLINE';
+        } elseif ($balance <= 0.0) {
+            $providerStatus = 'EMPTY';
+        } elseif ($balance < (float)config('services.provider.wallet_threshold', 20.0)) {
+            $providerStatus = 'LOW_BALANCE';
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'provider_status' => $providerStatus,
+                'current_wallet_balance' => $balance,
+                'currency' => 'USD',
+                'waiting_count' => $waitingOrders->count(),
+                'oldest_waiting_time' => $oldestWaitingTime,
+                'waiting_orders' => $waitingOrders,
+            ]
+        ]);
+    }
+
     public function retryOrder(Request $request, $id)
     {
         $order = \App\Models\Order::find($id);
@@ -822,15 +856,107 @@ class AdminController extends Controller
             ], 404);
         }
 
-        // Set status to processing and dispatch to topup queue
-        $order->status = \App\Enums\OrderStatus::PROCESSING;
-        $order->save();
+        $lockKey = "retry_order_lock_{$order->id}";
+        $lock = \Illuminate\Support\Facades\Cache::lock($lockKey, 30);
 
-        \App\Jobs\ProcessTopupJob::dispatch($order->id)->onQueue('topup');
+        if (!$lock->get()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order is currently being processed by another worker. Please try again in a moment.'
+            ], 429);
+        }
+
+        try {
+            $order->status = \App\Enums\OrderStatus::PROCESSING;
+            $order->save();
+
+            \App\Jobs\ProcessTopupJob::dispatchSync($order->id);
+
+            $order->refresh();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Topup order retry completed.',
+                'data' => $order
+            ]);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    public function retryAllWaitingOrders(Request $request)
+    {
+        $waitingOrders = \App\Models\Order::where('status', \App\Enums\OrderStatus::WAITING_PROVIDER_BALANCE)
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        $processedCount = 0;
+        $failedCount = 0;
+
+        foreach ($waitingOrders as $order) {
+            $lockKey = "retry_order_lock_{$order->id}";
+            $lock = \Illuminate\Support\Facades\Cache::lock($lockKey, 30);
+
+            if ($lock->get()) {
+                try {
+                    \App\Jobs\ProcessTopupJob::dispatchSync($order->id);
+                    $processedCount++;
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::error("Manual retry failed for order {$order->order_no}: " . $e->getMessage());
+                    $failedCount++;
+                } finally {
+                    $lock->release();
+                }
+            }
+        }
 
         return response()->json([
             'success' => true,
-            'message' => 'Topup order dispatched to processing queue successfully.',
+            'message' => "Bulk retry executed: {$processedCount} processed, {$failedCount} failed/skipped.",
+            'data' => [
+                'processed' => $processedCount,
+                'failed' => $failedCount,
+            ]
+        ]);
+    }
+
+    public function refundOrder(Request $request, $id)
+    {
+        $order = \App\Models\Order::find($id);
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order record not found.'
+            ], 404);
+        }
+
+        if ($order->status === \App\Enums\OrderStatus::COMPLETED) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot refund an already COMPLETED order.'
+            ], 400);
+        }
+
+        if ($order->status === \App\Enums\OrderStatus::REFUNDED) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order has already been refunded.'
+            ], 400);
+        }
+
+        $reason = $request->input('reason', 'Manual administrator refund approval');
+
+        $order->status = \App\Enums\OrderStatus::REFUNDED;
+        $order->refunded_at = now()->toDateTimeString();
+        $order->refund_reason = $reason;
+        $order->refunded_by = $request->user()->name ?? 'Admin';
+        $order->save();
+
+        \Illuminate\Support\Facades\Log::info("Order {$order->order_no} marked as REFUNDED by admin. Reason: {$reason}");
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Order successfully updated to REFUNDED status.',
             'data' => $order
         ]);
     }

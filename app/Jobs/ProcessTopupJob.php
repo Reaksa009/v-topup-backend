@@ -36,9 +36,9 @@ class ProcessTopupJob implements ShouldQueue
             return;
         }
 
-        // Prevent duplicate processing if already completed or waiting verification
-        if (in_array($order->status, [OrderStatus::COMPLETED, OrderStatus::WAITING_VERIFICATION])) {
-            Log::info("ProcessTopupJob: Order {$order->order_no} is already in state {$order->status}. Skipping execution.");
+        // Prevent duplicate processing if already completed
+        if ($order->status === OrderStatus::COMPLETED) {
+            Log::info("ProcessTopupJob: Order {$order->order_no} is already COMPLETED. Skipping execution.");
             return;
         }
 
@@ -63,6 +63,7 @@ class ProcessTopupJob implements ShouldQueue
                 $order->g2b_order_id = $res['data']['order_id'];
             }
             $order->status = OrderStatus::COMPLETED;
+            $order->completed_at = now()->toDateTimeString();
             $order->save();
 
             $telegramService->notifyTopupSuccess(
@@ -76,8 +77,29 @@ class ProcessTopupJob implements ShouldQueue
             $code = $res['code'] ?? 'ERROR';
             $msg = $res['message'] ?? 'Topup failed.';
 
-            if ($code === 'OUT_OF_STOCK') {
+            // REQUIREMENT: Provider unavailable or insufficient wholesaler balance -> WAITING_PROVIDER_BALANCE
+            if (in_array($code, ['PROVIDER_UNAVAILABLE', 'INSUFFICIENT_BALANCE', 'WAITING_PROVIDER_BALANCE'])) {
+                $order->status = OrderStatus::WAITING_PROVIDER_BALANCE;
+                $order->waiting_reason = "Provider balance insufficient or offline ({$code}: {$msg})";
+                $order->provider_status_snapshot = [
+                    'code' => $code,
+                    'message' => $msg,
+                    'timestamp' => now()->toIso8601String(),
+                ];
+                $order->retry_attempts = ($order->retry_attempts ?? 0) + 1;
+                $order->save();
+
+                Log::warning("Order {$order->order_no} placed in WAITING_PROVIDER_BALANCE queue due to: {$code} - {$msg}");
+
+                // Notify admin of waiting queue increase
+                $waitingCount = Order::where('status', OrderStatus::WAITING_PROVIDER_BALANCE)->count();
+                $threshold = (int) config('services.provider.queue_threshold', 5);
+                if ($waitingCount >= $threshold) {
+                    $telegramService->notifyQueueThresholdExceeded($waitingCount, $threshold);
+                }
+            } elseif ($code === 'OUT_OF_STOCK') {
                 $order->status = OrderStatus::WAITING_VERIFICATION;
+                $order->waiting_reason = "Provider out of stock";
                 $order->save();
 
                 $telegramService->notifyOutOfStock(
@@ -86,7 +108,9 @@ class ProcessTopupJob implements ShouldQueue
                     $order->package_name
                 );
             } else {
+                // Other unexpected failures -> WAITING_VERIFICATION for admin review (Customer money is preserved)
                 $order->status = OrderStatus::WAITING_VERIFICATION;
+                $order->waiting_reason = "Code: {$code} - {$msg}";
                 $order->save();
 
                 $telegramService->notifyTopupFailed(
@@ -102,8 +126,10 @@ class ProcessTopupJob implements ShouldQueue
     {
         Log::error("ProcessTopupJob failed permanently for order {$this->orderId}: " . $exception->getMessage());
         $order = Order::find($this->orderId);
-        if ($order) {
-            $order->status = OrderStatus::FAILED;
+        if ($order && $order->status !== OrderStatus::COMPLETED) {
+            // Safety: Move to WAITING_PROVIDER_BALANCE rather than failing paid customer order
+            $order->status = OrderStatus::WAITING_PROVIDER_BALANCE;
+            $order->waiting_reason = "Queue exception: " . $exception->getMessage();
             $order->save();
         }
     }

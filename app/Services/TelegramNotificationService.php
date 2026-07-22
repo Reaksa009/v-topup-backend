@@ -123,6 +123,43 @@ class TelegramNotificationService
     }
 
     /**
+     * Helper notification: Provider Wallet Restored
+     */
+    public function notifyWalletRestored(float $newBalance, int $waitingCount): bool
+    {
+        $msg = "🟢 <b>G2Bulk Wallet Balance Restored!</b>\n\n" .
+               "• <b>New Balance:</b> \$" . number_format($newBalance, 2) . "\n" .
+               "• <b>Waiting Orders Queue:</b> {$waitingCount} order(s)\n" .
+               "• <b>Action:</b> Automated FIFO retry processor dispatched.";
+        return $this->sendAdminAlert($msg);
+    }
+
+    /**
+     * Helper notification: Waiting Queue Threshold Exceeded
+     */
+    public function notifyQueueThresholdExceeded(int $waitingCount, int $threshold = 5): bool
+    {
+        $msg = "⚠️ <b>Provider Waiting Queue High!</b>\n\n" .
+               "• <b>Current Waiting Orders:</b> {$waitingCount}\n" .
+               "• <b>Threshold Limit:</b> {$threshold}\n" .
+               "• <b>Action Required:</b> Check provider balance or system status.";
+        return $this->sendAdminAlert($msg);
+    }
+
+    /**
+     * Helper notification: Repeated Retry Failure
+     */
+    public function notifyRepeatedRetryFailure(string $orderNo, int $attempts, string $reason): bool
+    {
+        $msg = "🛑 <b>Repeated Order Retry Failure!</b>\n\n" .
+               "• <b>Order No:</b> <code>{$orderNo}</code>\n" .
+               "• <b>Attempts Count:</b> {$attempts}\n" .
+               "• <b>Last Failure Reason:</b> {$reason}\n" .
+               "• <b>Action:</b> Requires admin manual review or manual refund.";
+        return $this->sendAdminAlert($msg);
+    }
+
+    /**
      * Helper notification: Provider API Down
      */
     public function notifyApiDown(string $providerName, string $endpoint, string $errorDetails): bool

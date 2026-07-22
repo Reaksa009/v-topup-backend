@@ -211,12 +211,18 @@ class CheckoutController extends Controller
             ];
         });
 
+        $noticeMessage = null;
+        if ($firstOrder->status === \App\Enums\OrderStatus::WAITING_PROVIDER_BALANCE) {
+            $noticeMessage = "Your payment has been received successfully. Your order is temporarily waiting to be processed because our service provider is currently unavailable. Your order will be processed automatically once the service resumes. No further action is required.";
+        }
+
         return response()->json([
             'success' => true,
             'data' => [
                 'order_no' => $firstOrder->order_no,
                 'status' => strtoupper($firstOrder->status),
                 'raw_status' => $firstOrder->status,
+                'customer_notice' => $noticeMessage,
                 'payment_method' => strtoupper(str_replace('_', ' ', $firstOrder->payment_method)),
                 'transaction_no' => $payment ? $payment->transaction_no : ($firstOrder->order_no),
                 'total_amount_usd' => (float) $firstOrder->total_price_usd,

@@ -50,4 +50,12 @@ return [
         'merchant_name' => env('KHQR_ACCOUNT_NAME', 'V-TOPUP-STORE CO., LTD.'),
     ],
 
+    'provider' => [
+        'wait_timeout_hours' => (int) env('PROVIDER_WAIT_TIMEOUT_HOURS', 24),
+        'max_retry_attempts' => (int) env('PROVIDER_MAX_RETRY_ATTEMPTS', 10),
+        'retry_interval' => (int) env('PROVIDER_RETRY_INTERVAL', 5),
+        'wallet_threshold' => (float) env('G2BULK_LOW_BALANCE_THRESHOLD', 20.0),
+        'auto_retry_enabled' => (bool) env('PROVIDER_AUTO_RETRY_ENABLED', true),
+    ],
+
 ];

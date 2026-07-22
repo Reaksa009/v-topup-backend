@@ -130,9 +130,12 @@ Route::middleware(['auth:sanctum', \App\Http\Middleware\IsAdmin::class])->group(
     Route::post('/admin/upload', [AdminController::class, 'uploadImage']);
     Route::post('/admin/settings', [AdminController::class, 'updateSettings']);
     
-    // G2Bulk API wholesaler additions
+    // G2Bulk API wholesaler additions & Provider Queue Management
     Route::get('/admin/api-logs', [AdminController::class, 'apiLogs']);
     Route::get('/admin/g2bulk-balance', [AdminController::class, 'walletBalance']);
+    Route::get('/admin/provider-queue', [AdminController::class, 'providerQueue']);
     Route::post('/admin/g2bulk/sync', [AdminController::class, 'syncG2BulkCatalog']);
     Route::post('/admin/orders/{id}/retry', [AdminController::class, 'retryOrder']);
+    Route::post('/admin/orders/retry-all', [AdminController::class, 'retryAllWaitingOrders']);
+    Route::post('/admin/orders/{id}/refund', [AdminController::class, 'refundOrder']);
 });
