@@ -13,6 +13,7 @@ use App\Enums\OrderStatus;
 use App\Models\ApiLog;
 use App\Models\Order;
 use App\Models\News;
+use App\Models\Banner;
 
 class GameController extends Controller
 {
@@ -28,6 +29,41 @@ class GameController extends Controller
         $this->gameRepository = $gameRepository;
         $this->categoryRepository = $categoryRepository;
         $this->g2bulkService = $g2bulkService;
+    }
+
+    public function home()
+    {
+        $homeData = Cache::remember('home_page_data_v1', 3600, function () {
+            $games = $this->gameRepository->allActive();
+            $categories = $this->categoryRepository->allActive();
+            $banners = Banner::where('is_active', true)->orderBy('order_index', 'asc')->get();
+            $news = News::where('is_published', true)->orderBy('created_at', 'desc')->limit(5)->get();
+
+            $path = storage_path('app/settings.json');
+            $settings = [
+                'maintenance_mode' => false,
+                'alert_message' => 'Welcome to V-TOPUP-STORE! Fast payments and 24/7 top-up services active.',
+            ];
+            if (file_exists($path)) {
+                $decoded = json_decode(file_get_contents($path), true);
+                if ($decoded) {
+                    $settings = $decoded;
+                }
+            }
+
+            return [
+                'games' => $games,
+                'categories' => $categories,
+                'banners' => $banners,
+                'news' => $news,
+                'settings' => $settings,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $homeData,
+        ]);
     }
 
     public function index()

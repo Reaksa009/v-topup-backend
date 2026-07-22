@@ -66,6 +66,7 @@ Route::middleware('throttle:10,1')->group(function () {
     Route::post('/auth/login', [AuthController::class, 'login']);
 });
 
+Route::get('/home', [GameController::class, 'home']);
 Route::get('/games/active', [GameController::class, 'index']);
 Route::get('/games/categories', [GameController::class, 'categories']);
 Route::get('/games/slug/{slug}', [GameController::class, 'show']);
