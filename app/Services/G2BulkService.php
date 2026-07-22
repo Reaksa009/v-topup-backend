@@ -160,13 +160,18 @@ class G2BulkService
 
                     if ($catName === $dbName) {
                         $isMatch = true;
-                    } elseif (str_contains($dbName, 'weekly pass') && str_contains($catName, 'weekly') && !str_contains($catName, 'elite')) {
-                        $isMatch = true;
+                    } elseif ((str_contains($dbName, 'weekly pass') || str_contains($dbName, 'weekly')) && !str_contains($dbName, 'elite')) {
+                        if ($catName === 'weekly' || (str_contains($catName, 'weekly') && !str_contains($catName, 'elite'))) {
+                            $isMatch = true;
+                        }
                     } elseif (str_contains($dbName, 'weekly elite') && str_contains($catName, 'weekly elite')) {
+                        $isMatch = true;
+                    } elseif (str_contains($dbName, 'twilight') && str_contains($catName, 'twilight')) {
                         $isMatch = true;
                     } elseif (str_contains($dbName, 'monthly') && str_contains($catName, 'monthly')) {
                         $isMatch = true;
                     } else {
+                        // Extract leading numbers (e.g. "86 Diamonds" -> "86", "250 Diamonds" -> "250")
                         $dbNumOnly = preg_replace('/[^0-9]/', '', $dbName);
                         $catNumOnly = preg_replace('/[^0-9]/', '', $catName);
                         if (!empty($dbNumOnly) && !empty($catNumOnly) && $dbNumOnly === $catNumOnly) {
