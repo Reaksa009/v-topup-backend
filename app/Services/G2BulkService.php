@@ -142,7 +142,20 @@ class G2BulkService
      */
     public function placeOrder(string $gameCode, string $catalogueName, string $playerId, ?string $serverId, string $orderNo): array
     {
+        // 0. Normalize game code mapping
+        $gameMapping = [
+            'mobile-legends' => 'mlbb',
+            'mobile-khmer' => 'mlbb',
+            'free-fire' => 'freefire_global',
+            'pubg-mobile' => 'pubgm',
+            'valorant' => 'valorant_sg',
+            'honor-of-kings' => 'hok',
+            'roblox' => 'roblox',
+        ];
+        $gameCode = $gameMapping[strtolower(trim($gameCode))] ?? strtolower(trim($gameCode));
+
         // 1. Resolve catalog name
+        $isResolved = false;
         try {
             $catUrl = "{$this->baseUrl}/games/{$gameCode}/catalogue";
             $catRes = Http::retry(2, 500)
@@ -181,12 +194,32 @@ class G2BulkService
 
                     if ($isMatch) {
                         $catalogueName = $cat['name'];
+                        $isResolved = true;
                         break;
                     }
                 }
             }
         } catch (\Exception $e) {
             Log::warning("G2Bulk catalogue resolution error for {$orderNo}: " . $e->getMessage());
+        }
+
+        // Fallback string sanitization if catalogue resolution was not completed
+        if (!$isResolved) {
+            $lowerName = strtolower(trim($catalogueName));
+            if ((str_contains($lowerName, 'weekly pass') || str_contains($lowerName, 'weekly')) && !str_contains($lowerName, 'elite')) {
+                $catalogueName = 'Weekly';
+            } elseif (str_contains($lowerName, 'weekly elite')) {
+                $catalogueName = 'Weekly Elite Pack';
+            } elseif (str_contains($lowerName, 'twilight')) {
+                $catalogueName = 'Twilight';
+            } elseif (str_contains($lowerName, 'monthly')) {
+                $catalogueName = 'Monthly Elite Pack';
+            } else {
+                $numOnly = preg_replace('/[^0-9]/', '', $lowerName);
+                if (!empty($numOnly)) {
+                    $catalogueName = $numOnly; // e.g. "86 Diamonds" -> "86"
+                }
+            }
         }
 
         // 2. Submit order to G2Bulk
