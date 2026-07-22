@@ -33,18 +33,55 @@ class Package extends Model
     ];
 
     protected $casts = [
-        'provider_price_usd' => 'float',
         'provider_price_khr' => 'integer',
-        'selling_price_usd' => 'float',
         'selling_price_khr' => 'integer',
-        'price_usd' => 'float',
         'price_khr' => 'integer',
-        'original_price_usd' => 'float',
         'original_price_khr' => 'integer',
-        'profit_amount' => 'float',
-        'profit_percentage' => 'float',
+        'points_or_diamonds' => 'integer',
+        'bonus_points' => 'integer',
         'is_active' => 'boolean',
     ];
+
+    /**
+     * Safely cast BSON Decimal128 or string values to float.
+     */
+    private function safeFloat($value): float
+    {
+        if ($value instanceof \MongoDB\BSON\Decimal128) {
+            return (float) (string) $value;
+        }
+        return (float) ($value ?? 0.0);
+    }
+
+    public function getPriceUsdAttribute($value): float
+    {
+        return $this->safeFloat($value);
+    }
+
+    public function getSellingPriceUsdAttribute($value): float
+    {
+        return $this->safeFloat($value ?? $this->attributes['price_usd'] ?? 0.0);
+    }
+
+    public function getProviderPriceUsdAttribute($value): float
+    {
+        return $this->safeFloat($value ?? $this->attributes['original_price_usd'] ?? 0.0);
+    }
+
+    public function getOriginalPriceUsdAttribute($value): float
+    {
+        return $this->safeFloat($value ?? 0.0);
+    }
+
+    public function getProfitAmountAttribute($value): float
+    {
+        return $this->safeFloat($value ?? 0.0);
+    }
+
+    public function getProfitPercentageAttribute($value): float
+    {
+        return $this->safeFloat($value ?? 0.0);
+    }
 
     public function game()
     {
@@ -56,8 +93,8 @@ class Package extends Model
      */
     public function recalculateProfit(): void
     {
-        $providerPrice = (float)($this->provider_price_usd ?? $this->original_price_usd ?? 0.0);
-        $sellingPrice = (float)($this->selling_price_usd ?? $this->price_usd ?? 0.0);
+        $providerPrice = $this->safeFloat($this->provider_price_usd ?? $this->original_price_usd ?? 0.0);
+        $sellingPrice = $this->safeFloat($this->selling_price_usd ?? $this->price_usd ?? 0.0);
 
         $this->profit_amount = round($sellingPrice - $providerPrice, 2);
         $this->profit_percentage = $providerPrice > 0 
