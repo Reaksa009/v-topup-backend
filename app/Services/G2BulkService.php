@@ -232,9 +232,12 @@ class G2BulkService
             $errorMsg = $resBody['message'] ?? 'Provider error occurred.';
             $errorCode = 'PROVIDER_ERROR';
 
-            if ($statusCode === 404) {
+            $lowerMsg = strtolower($errorMsg);
+            if (str_contains($lowerMsg, 'balance') || str_contains($lowerMsg, 'insufficient')) {
+                $errorCode = 'INSUFFICIENT_BALANCE';
+            } elseif ($statusCode === 404) {
                 $errorCode = 'CATALOGUE_NOT_FOUND';
-            } elseif ($statusCode === 400 && str_contains(strtolower($errorMsg), 'player id')) {
+            } elseif ($statusCode === 400 && (str_contains($lowerMsg, 'player') || str_contains($lowerMsg, 'user'))) {
                 $errorCode = 'INVALID_PLAYER_ID';
             } elseif ($statusCode === 401) {
                 $errorCode = 'UNAUTHORIZED';
