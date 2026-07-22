@@ -178,4 +178,52 @@ class CheckoutController extends Controller
             ], 500);
         }
     }
+
+    public function trackOrder($orderNo)
+    {
+        $orders = \App\Models\Order::where('order_no', $orderNo)->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order not found.'
+            ], 404);
+        }
+
+        $payment = \App\Models\Payment::where('order_no', $orderNo)->first();
+        $firstOrder = $orders->first();
+
+        $items = $orders->map(function ($ord) {
+            return [
+                'id' => $ord->id,
+                'game_id' => $ord->game_id,
+                'package_id' => $ord->package_id,
+                'game_name_en' => $ord->game_name,
+                'game_name_kh' => $ord->game_name,
+                'package_name_en' => $ord->package_name,
+                'package_name_kh' => $ord->package_name,
+                'player_id' => $ord->player_id,
+                'server_id' => $ord->server_id,
+                'qty' => $ord->qty,
+                'price_usd' => (float) $ord->price_usd,
+                'status' => $ord->status,
+                'g2b_order_id' => $ord->g2b_order_id ?? null,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'order_no' => $firstOrder->order_no,
+                'status' => strtoupper($firstOrder->status),
+                'raw_status' => $firstOrder->status,
+                'payment_method' => strtoupper(str_replace('_', ' ', $firstOrder->payment_method)),
+                'transaction_no' => $payment ? $payment->transaction_no : ($firstOrder->order_no),
+                'total_amount_usd' => (float) $firstOrder->total_price_usd,
+                'total_amount_khr' => (int) $firstOrder->total_price_khr,
+                'created_at' => $firstOrder->created_at ? $firstOrder->created_at->format('n/j/Y, g:i:s A') : now()->format('n/j/Y, g:i:s A'),
+                'items' => $items,
+            ]
+        ]);
+    }
 }

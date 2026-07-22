@@ -82,6 +82,7 @@ Route::post('/coupons/validate', [CheckoutController::class, 'validateCoupon']);
 
 Route::middleware('throttle:30,1')->group(function () {
     Route::post('/orders/checkout', [CheckoutController::class, 'checkout']);
+    Route::get('/orders/tracking/{orderNo}', [CheckoutController::class, 'trackOrder']);
     Route::post('/payments/generate-khqr', [CheckoutController::class, 'generateKhqr']);
     Route::get('/payments/check-khqr/{md5}', [CheckoutController::class, 'checkKhqrStatus']);
 });
