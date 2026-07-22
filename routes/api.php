@@ -117,6 +117,7 @@ Route::middleware(['auth:sanctum', \App\Http\Middleware\IsAdmin::class])->group(
     Route::post('/admin/packages', [AdminController::class, 'createPackage']);
     Route::put('/admin/packages/{id}', [AdminController::class, 'updatePackage']);
     Route::delete('/admin/packages/{id}', [AdminController::class, 'deletePackage']);
+    Route::get('/admin/price-audit-logs', [AdminController::class, 'priceAuditLogs']);
     
     Route::get('/admin/coupons', [AdminController::class, 'coupons']);
     Route::post('/admin/coupons', [AdminController::class, 'createCoupon']);

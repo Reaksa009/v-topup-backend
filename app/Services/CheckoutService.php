@@ -73,7 +73,13 @@ class CheckoutService
                     throw new \Exception("Package not found.");
                 }
 
-                $itemSubtotal = (float) $package->price_usd * (int) $item['qty'];
+                $sellingPriceUsd = (float)($package->selling_price_usd ?? $package->price_usd ?? 0.0);
+                $sellingPriceKhr = (int)($package->selling_price_khr ?? $package->price_khr ?? round($sellingPriceUsd * 4100));
+                $providerPriceUsd = (float)($package->provider_price_usd ?? $package->original_price_usd ?? 0.0);
+                $profitAmount = round($sellingPriceUsd - $providerPriceUsd, 2);
+                $profitPct = $providerPriceUsd > 0 ? round(($profitAmount / $providerPriceUsd) * 100, 2) : 0.0;
+
+                $itemSubtotal = $sellingPriceUsd * (int) $item['qty'];
                 $totalSubtotal += $itemSubtotal;
 
                 $processedItems[] = [
@@ -82,8 +88,13 @@ class CheckoutService
                     'player_id' => $item['player_id'],
                     'server_id' => $item['server_id'] ?? null,
                     'qty' => $item['qty'],
-                    'price_usd' => (float) $package->price_usd,
-                    'price_khr' => (int) $package->price_khr,
+                    'selling_price_usd' => $sellingPriceUsd,
+                    'selling_price_khr' => $sellingPriceKhr,
+                    'provider_price_usd' => $providerPriceUsd,
+                    'profit_amount' => $profitAmount,
+                    'profit_percentage' => $profitPct,
+                    'price_usd' => $sellingPriceUsd,
+                    'price_khr' => $sellingPriceKhr,
                 ];
             }
 
@@ -122,13 +133,18 @@ class CheckoutService
                     'provider_game_code' => $pItem['package']->provider_game_code ?? 'mlbb',
                     'provider_catalogue_id' => $pItem['package']->provider_catalogue_id ?? null,
                     'provider_catalogue_name' => $pItem['package']->provider_catalogue_name ?? $pItem['package']->name_en,
+                    'provider_price_usd' => $pItem['provider_price_usd'],
+                    'selling_price_usd' => $pItem['selling_price_usd'],
+                    'selling_price_khr' => $pItem['selling_price_khr'],
+                    'profit_amount' => $pItem['profit_amount'],
+                    'profit_percentage' => $pItem['profit_percentage'],
                     'game_name' => $pItem['game']->name_en,
                     'package_name' => $pItem['package']->name_en,
                     'player_id' => $pItem['player_id'],
                     'server_id' => $pItem['server_id'],
                     'qty' => $pItem['qty'],
-                    'original_price_usd' => $pItem['price_usd'],
-                    'price_usd' => $pItem['price_usd'],
+                    'original_price_usd' => $pItem['provider_price_usd'],
+                    'price_usd' => $pItem['selling_price_usd'],
                     'discount_usd' => $discount,
                     'total_price_usd' => $totalUsd,
                     'total_price_khr' => $totalKhr,

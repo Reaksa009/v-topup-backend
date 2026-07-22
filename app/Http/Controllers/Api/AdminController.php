@@ -15,6 +15,7 @@ use App\Models\Package;
 use App\Models\Coupon;
 use App\Models\Category;
 use App\Models\Banner;
+use App\Models\PriceAuditLog;
 
 class AdminController extends Controller
 {
@@ -397,16 +398,38 @@ class AdminController extends Controller
     // --- Packages (Products) Management ---
     public function packages()
     {
+    public function packages(Request $request)
+    {
         $packages = Package::with('game')->get();
-        // Map data to match client requirements
         $mapped = $packages->map(function ($p) {
+            $providerPrice = (float)($p->provider_price_usd ?? $p->original_price_usd ?? 0.0);
+            $sellingPrice = (float)($p->selling_price_usd ?? $p->price_usd ?? 0.0);
+            $profitAmount = (float)($p->profit_amount ?? round($sellingPrice - $providerPrice, 2));
+            $profitPct = (float)($p->profit_percentage ?? ($providerPrice > 0 ? round(($profitAmount / $providerPrice) * 100, 2) : 0.0));
+
             return [
                 'id' => $p->id,
+                'game_id' => $p->game_id,
                 'game_name' => $p->game ? $p->game->name_en : 'Unknown Game',
                 'name' => $p->name_en,
-                'price_usd' => (float)$p->price_usd,
-                'discount_pct' => $p->original_price_usd > $p->price_usd ? round((($p->original_price_usd - $p->price_usd) / $p->original_price_usd) * 100) : 0,
-                'is_available' => $p->is_active
+                'name_en' => $p->name_en,
+                'name_kh' => $p->name_kh,
+                'provider' => $p->provider ?? 'g2bulk',
+                'provider_game_code' => $p->provider_game_code ?? 'mlbb',
+                'provider_catalogue_id' => $p->provider_catalogue_id ?? '',
+                'provider_catalogue_name' => $p->provider_catalogue_name ?? $p->name_en,
+                'provider_price_usd' => $providerPrice,
+                'provider_price_khr' => (int)($p->provider_price_khr ?? round($providerPrice * 4100)),
+                'selling_price_usd' => $sellingPrice,
+                'selling_price_khr' => (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100)),
+                'price_usd' => $sellingPrice,
+                'price_khr' => (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100)),
+                'original_price_usd' => (float)($p->original_price_usd ?? $providerPrice),
+                'profit_amount' => $profitAmount,
+                'profit_percentage' => $profitPct,
+                'discount_pct' => $p->original_price_usd > $sellingPrice ? round((($p->original_price_usd - $sellingPrice) / $p->original_price_usd) * 100) : 0,
+                'is_available' => $p->is_active,
+                'is_active' => $p->is_active,
             ];
         });
 
@@ -421,8 +444,9 @@ class AdminController extends Controller
         $validator = Validator::make($request->all(), [
             'game_id' => 'required|exists:games,id',
             'name_en' => 'required|string|max:255',
-            'price_usd' => 'required|numeric',
-            'discount_pct' => 'nullable|integer'
+            'selling_price_usd' => 'required_without:price_usd|numeric|min:0.01',
+            'price_usd' => 'required_without:selling_price_usd|numeric|min:0.01',
+            'provider_price_usd' => 'nullable|numeric|min:0',
         ]);
 
         if ($validator->fails()) {
@@ -434,23 +458,42 @@ class AdminController extends Controller
             return response()->json(['success' => false, 'message' => 'Selected game not found.'], 404);
         }
 
-        $priceUsd = (float)$request->price_usd;
-        $discountPct = (int)$request->input('discount_pct', 0);
-        $originalPrice = $priceUsd;
-        if ($discountPct > 0) {
-            $originalPrice = $priceUsd / (1 - ($discountPct / 100));
+        $sellingPriceUsd = (float)($request->selling_price_usd ?? $request->price_usd);
+        $providerPriceUsd = (float)($request->input('provider_price_usd', round($sellingPriceUsd * 0.90, 2)));
+
+        if ($sellingPriceUsd < $providerPriceUsd) {
+            return response()->json([
+                'success' => false,
+                'message' => "Selling price (\${$sellingPriceUsd}) cannot be lower than wholesale provider price (\${$providerPriceUsd})."
+            ], 422);
         }
+
+        $sellingPriceKhr = (int)($request->input('selling_price_khr', round($sellingPriceUsd * 4100)));
+        $providerPriceKhr = (int)($request->input('provider_price_khr', round($providerPriceUsd * 4100)));
 
         preg_match('/\d+/', $request->name_en, $matches);
         $points = isset($matches[0]) ? (int)$matches[0] : 0;
 
+        $profitAmount = round($sellingPriceUsd - $providerPriceUsd, 2);
+        $profitPct = $providerPriceUsd > 0 ? round(($profitAmount / $providerPriceUsd) * 100, 2) : 0.0;
+
         $package = Package::create([
             'game_id' => $game->id,
+            'provider' => $request->input('provider', 'g2bulk'),
+            'provider_game_code' => $request->input('provider_game_code', 'mlbb'),
+            'provider_catalogue_id' => $request->input('provider_catalogue_id'),
+            'provider_catalogue_name' => $request->input('provider_catalogue_name', $request->name_en),
             'name_en' => $request->name_en,
-            'name_kh' => $request->name_en,
-            'price_usd' => $priceUsd,
-            'price_khr' => (int)($priceUsd * 4100),
-            'original_price_usd' => $originalPrice,
+            'name_kh' => $request->input('name_kh', $request->name_en),
+            'provider_price_usd' => $providerPriceUsd,
+            'provider_price_khr' => $providerPriceKhr,
+            'selling_price_usd' => $sellingPriceUsd,
+            'selling_price_khr' => $sellingPriceKhr,
+            'price_usd' => $sellingPriceUsd,
+            'price_khr' => $sellingPriceKhr,
+            'original_price_usd' => (float)$request->input('original_price_usd', $providerPriceUsd),
+            'profit_amount' => $profitAmount,
+            'profit_percentage' => $profitPct,
             'points_or_diamonds' => $points,
             'bonus_points' => 0,
             'is_active' => true
@@ -458,7 +501,7 @@ class AdminController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Top-up package registered successfully.',
+            'message' => 'Top-up package created successfully.',
             'data' => $package
         ]);
     }
@@ -470,47 +513,127 @@ class AdminController extends Controller
             return response()->json(['success' => false, 'message' => 'Package not found.'], 404);
         }
 
+        $providerPriceUsd = (float)($package->provider_price_usd ?? $package->original_price_usd ?? 0.0);
+
+        // Validation Rules: Selling price cannot be null, negative, or lower than provider price
         $validator = Validator::make($request->all(), [
-            'game_id' => 'required|exists:games,id',
-            'name_en' => 'required|string|max:255',
-            'price_usd' => 'required|numeric',
-            'discount_pct' => 'nullable|integer'
+            'selling_price_usd' => [
+                'required_without:price_usd',
+                'numeric',
+                'min:' . max(0, $providerPriceUsd)
+            ],
+            'price_usd' => [
+                'required_without:selling_price_usd',
+                'numeric',
+                'min:' . max(0, $providerPriceUsd)
+            ],
+            'selling_price_khr' => 'nullable|numeric|min:0',
+            'original_price_usd' => 'nullable|numeric|min:0',
+            'is_active' => 'nullable|boolean',
+            'reason' => 'nullable|string|max:255'
+        ], [
+            'selling_price_usd.min' => "Selling price cannot be lower than wholesale provider price (\${$providerPriceUsd}).",
+            'price_usd.min' => "Selling price cannot be lower than wholesale provider price (\${$providerPriceUsd}).",
+            'selling_price_usd.required_without' => 'Selling price USD is required and cannot be null.',
+            'price_usd.required_without' => 'Selling price USD is required and cannot be null.',
         ]);
 
         if ($validator->fails()) {
             return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
         }
 
-        $priceUsd = (float)$request->price_usd;
-        $discountPct = (int)$request->input('discount_pct', 0);
-        $originalPrice = $priceUsd;
-        if ($discountPct > 0) {
-            $originalPrice = $priceUsd / (1 - ($discountPct / 100));
+        // READ-ONLY PROTECTION: Do NOT update provider, provider_game_code, provider_catalogue_id, provider_catalogue_name, provider_price_usd!
+        // These remain untouched so automatic G2Bulk top-up fulfillment is NEVER broken.
+
+        $oldSellingPriceUsd = (float)($package->selling_price_usd ?? $package->price_usd ?? 0.0);
+        $oldSellingPriceKhr = (int)($package->selling_price_khr ?? $package->price_khr ?? 0);
+        $oldProfitAmount = (float)($package->profit_amount ?? 0.0);
+
+        $newSellingPriceUsd = round((float)($request->selling_price_usd ?? $request->price_usd), 2);
+        $newSellingPriceKhr = $request->has('selling_price_khr') && (int)$request->selling_price_khr > 0
+            ? (int)$request->selling_price_khr
+            : (int)round($newSellingPriceUsd * 4100);
+
+        // Update ONLY Admin editable fields
+        $package->selling_price_usd = $newSellingPriceUsd;
+        $package->selling_price_khr = $newSellingPriceKhr;
+        $package->price_usd = $newSellingPriceUsd; // Backward compatibility
+        $package->price_khr = $newSellingPriceKhr; // Backward compatibility
+
+        if ($request->has('name_en')) {
+            $package->name_en = (string)$request->name_en;
+        }
+        if ($request->has('name_kh')) {
+            $package->name_kh = (string)$request->name_kh;
+        }
+        if ($request->has('original_price_usd')) {
+            $package->original_price_usd = (float)$request->original_price_usd;
+        }
+        if ($request->has('is_active')) {
+            $package->is_active = (bool)$request->is_active;
         }
 
-        preg_match('/\d+/', $request->name_en, $matches);
-        $points = isset($matches[0]) ? (int)$matches[0] : 0;
+        // Recalculate profit amount & percentage
+        $package->recalculateProfit();
+        $package->save();
 
-        $package->update([
-            'game_id' => $request->game_id,
-            'name_en' => $request->name_en,
-            'name_kh' => $request->name_en,
-            'price_usd' => $priceUsd,
-            'price_khr' => (int)($priceUsd * 4100),
-            'original_price_usd' => $originalPrice,
-            'points_or_diamonds' => $points,
+        // Audit Log entry
+        $admin = $request->user();
+        PriceAuditLog::create([
+            'admin_id' => $admin ? (string)$admin->id : 'system',
+            'admin_name' => $admin ? $admin->name : 'Admin',
+            'package_id' => (string)$package->id,
+            'package_name' => $package->name_en,
+            'game_name' => $package->game ? $package->game->name_en : 'Unknown Game',
+            'old_selling_price_usd' => $oldSellingPriceUsd,
+            'new_selling_price_usd' => $newSellingPriceUsd,
+            'old_selling_price_khr' => $oldSellingPriceKhr,
+            'new_selling_price_khr' => $newSellingPriceKhr,
+            'provider_price_usd' => (float)($package->provider_price_usd ?? 0.0),
+            'old_profit_amount' => $oldProfitAmount,
+            'new_profit_amount' => (float)$package->profit_amount,
+            'new_profit_percentage' => (float)$package->profit_percentage,
+            'ip_address' => $request->ip(),
+            'reason' => $request->input('reason', 'Admin updated selling price'),
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Package updated successfully.',
+            'message' => 'Selling price updated successfully.',
             'data' => [
                 'id' => $package->id,
                 'game_name' => $package->game ? $package->game->name_en : 'Unknown Game',
                 'name' => $package->name_en,
-                'price_usd' => (float)$package->price_usd,
-                'discount_pct' => $discountPct,
-                'is_available' => $package->is_active
+                'provider' => $package->provider ?? 'g2bulk',
+                'provider_game_code' => $package->provider_game_code ?? 'mlbb',
+                'provider_catalogue_id' => $package->provider_catalogue_id ?? '',
+                'provider_catalogue_name' => $package->provider_catalogue_name ?? $package->name_en,
+                'provider_price_usd' => (float)($package->provider_price_usd ?? 0.0),
+                'selling_price_usd' => (float)$package->selling_price_usd,
+                'selling_price_khr' => (int)$package->selling_price_khr,
+                'price_usd' => (float)$package->selling_price_usd,
+                'original_price_usd' => (float)($package->original_price_usd ?? 0.0),
+                'profit_amount' => (float)$package->profit_amount,
+                'profit_percentage' => (float)$package->profit_percentage,
+                'is_available' => $package->is_active,
+                'is_active' => $package->is_active,
+            ]
+        ]);
+    }
+
+    public function priceAuditLogs(Request $request)
+    {
+        $perPage = (int)$request->query('per_page', 20);
+        $logs = PriceAuditLog::orderBy('created_at', 'desc')->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $logs->items(),
+            'pagination' => [
+                'current_page' => $logs->currentPage(),
+                'last_page' => $logs->lastPage(),
+                'per_page' => $logs->perPage(),
+                'total' => $logs->total(),
             ]
         ]);
     }
