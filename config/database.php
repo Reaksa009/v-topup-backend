@@ -66,12 +66,14 @@ return [
 
         'mongodb' => [
             'driver' => 'mongodb',
-            'dsn' => env('DB_URI', 'mongodb://127.0.0.1:27017/V_topup'),
-            'database' => env('DB_DATABASE', 'V_topup'),
+            'dsn' => env('DB_URI', env('MONGODB_URI', 'mongodb://127.0.0.1:27017/v-topup')),
+            'database' => env('DB_DATABASE', 'v-topup'),
             'options' => [
-                'maxPoolSize' => env('DB_MAX_POOL_SIZE', 100),
-                'minPoolSize' => env('DB_MIN_POOL_SIZE', 10),
+                'maxPoolSize' => (int) env('DB_MAX_POOL_SIZE', 100),
+                'minPoolSize' => (int) env('DB_MIN_POOL_SIZE', 10),
                 'retryWrites' => true,
+                'connectTimeoutMS' => 10000,
+                'serverSelectionTimeoutMS' => 10000,
             ]
         ],
 

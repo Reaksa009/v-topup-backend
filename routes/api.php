@@ -60,8 +60,11 @@ Route::get('/health', function () {
     ], $isHealthy ? 200 : 500);
 });
 
-Route::post('/auth/register', [AuthController::class, 'register']);
-Route::post('/auth/login', [AuthController::class, 'login']);
+// --- Public Authentication & Catalogs ---
+Route::middleware('throttle:10,1')->group(function () {
+    Route::post('/auth/register', [AuthController::class, 'register']);
+    Route::post('/auth/login', [AuthController::class, 'login']);
+});
 
 Route::get('/games/active', [GameController::class, 'index']);
 Route::get('/games/categories', [GameController::class, 'categories']);
@@ -73,13 +76,15 @@ Route::get('/banners/active', [AdminController::class, 'activeBanners']);
 Route::get('/news/latest', [GameController::class, 'latestNews']);
 
 Route::get('/settings', [GameController::class, 'getSettings']);
-Route::post('/games/verify-player', [GameController::class, 'verifyPlayer']);
+Route::post('/games/verify-player', [GameController::class, 'verifyPlayer'])->middleware('throttle:30,1');
 Route::post('/webhooks/g2bulk', [GameController::class, 'g2bulkWebhook']);
 Route::post('/coupons/validate', [CheckoutController::class, 'validateCoupon']);
 
-Route::post('/orders/checkout', [CheckoutController::class, 'checkout']);
-Route::post('/payments/generate-khqr', [CheckoutController::class, 'generateKhqr']);
-Route::get('/payments/check-khqr/{md5}', [CheckoutController::class, 'checkKhqrStatus']);
+Route::middleware('throttle:30,1')->group(function () {
+    Route::post('/orders/checkout', [CheckoutController::class, 'checkout']);
+    Route::post('/payments/generate-khqr', [CheckoutController::class, 'generateKhqr']);
+    Route::get('/payments/check-khqr/{md5}', [CheckoutController::class, 'checkKhqrStatus']);
+});
 
 // --- Protected Customer Area ---
 Route::middleware('auth:sanctum')->group(function () {
