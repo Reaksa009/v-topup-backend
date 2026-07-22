@@ -46,23 +46,13 @@ class ProcessTopupJob implements ShouldQueue
         $order->status = OrderStatus::PROCESSING;
         $order->save();
 
-        $game = \App\Models\Game::find($order->game_id);
-        $gameSlug = $game ? $game->slug : 'mobile-legends';
-
-        $gameMapping = [
-            'mobile-legends' => 'mlbb',
-            'mobile-khmer' => 'mlbb',
-            'free-fire' => 'freefire_global',
-            'pubg-mobile' => 'pubgm',
-            'valorant' => 'valorant_sg',
-            'honor-of-kings' => 'hok',
-            'roblox' => 'roblox',
-        ];
-        $gameCode = $gameMapping[$gameSlug] ?? 'mlbb';
+        $package = \App\Models\Package::find($order->package_id);
+        $providerGameCode = $order->provider_game_code ?? ($package->provider_game_code ?? 'mlbb');
+        $providerCatalogueName = $order->provider_catalogue_name ?? ($package->provider_catalogue_name ?? $order->package_name);
 
         $res = $g2bulkService->placeOrder(
-            $gameCode,
-            $order->package_name,
+            $providerGameCode,
+            $providerCatalogueName,
             $order->player_id,
             $order->server_id,
             $order->order_no

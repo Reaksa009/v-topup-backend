@@ -138,11 +138,20 @@ class G2BulkService
     }
 
     /**
-     * Submit Topup Order.
+     * Submit Topup Order using explicit provider mapping fields.
      */
     public function placeOrder(string $gameCode, string $catalogueName, string $playerId, ?string $serverId, string $orderNo): array
     {
-        // 0. Normalize game code mapping
+        // 0. Pre-Order Validation
+        if (empty(trim($playerId))) {
+            return [
+                'success' => false,
+                'code' => 'INVALID_PLAYER_ID',
+                'message' => 'Player ID is required.',
+            ];
+        }
+
+        // 1. Normalize provider game code mapping
         $gameMapping = [
             'mobile-legends' => 'mlbb',
             'mobile-khmer' => 'mlbb',
@@ -152,82 +161,37 @@ class G2BulkService
             'honor-of-kings' => 'hok',
             'roblox' => 'roblox',
         ];
-        $gameCode = $gameMapping[strtolower(trim($gameCode))] ?? strtolower(trim($gameCode));
+        $finalGameCode = $gameMapping[strtolower(trim($gameCode))] ?? strtolower(trim($gameCode));
 
-        // 1. Resolve catalog name
-        $isResolved = false;
-        try {
-            $catUrl = "{$this->baseUrl}/games/{$gameCode}/catalogue";
-            $catRes = Http::retry(2, 500)
-                ->timeout(8)
-                ->withHeaders([
-                    'X-API-Key' => $this->apiKey,
-                    'Accept' => 'application/json',
-                ])->get($catUrl);
+        // 2. Determine catalogue name (use direct provider_catalogue_name if matching G2Bulk format)
+        $finalCatalogueName = trim($catalogueName);
 
-            if ($catRes->successful() && isset($catRes->json()['catalogues'])) {
-                $dbName = strtolower(trim($catalogueName));
-                foreach ($catRes->json()['catalogues'] as $cat) {
-                    $catName = strtolower(trim($cat['name']));
-                    $isMatch = false;
-
-                    if ($catName === $dbName) {
-                        $isMatch = true;
-                    } elseif ((str_contains($dbName, 'weekly pass') || str_contains($dbName, 'weekly')) && !str_contains($dbName, 'elite')) {
-                        if ($catName === 'weekly' || (str_contains($catName, 'weekly') && !str_contains($catName, 'elite'))) {
-                            $isMatch = true;
-                        }
-                    } elseif (str_contains($dbName, 'weekly elite') && str_contains($catName, 'weekly elite')) {
-                        $isMatch = true;
-                    } elseif (str_contains($dbName, 'twilight') && str_contains($catName, 'twilight')) {
-                        $isMatch = true;
-                    } elseif (str_contains($dbName, 'monthly') && str_contains($catName, 'monthly')) {
-                        $isMatch = true;
-                    } else {
-                        // Extract leading numbers (e.g. "86 Diamonds" -> "86", "250 Diamonds" -> "250")
-                        $dbNumOnly = preg_replace('/[^0-9]/', '', $dbName);
-                        $catNumOnly = preg_replace('/[^0-9]/', '', $catName);
-                        if (!empty($dbNumOnly) && !empty($catNumOnly) && $dbNumOnly === $catNumOnly) {
-                            $isMatch = true;
-                        }
-                    }
-
-                    if ($isMatch) {
-                        $catalogueName = $cat['name'];
-                        $isResolved = true;
-                        break;
-                    }
-                }
-            }
-        } catch (\Exception $e) {
-            Log::warning("G2Bulk catalogue resolution error for {$orderNo}: " . $e->getMessage());
-        }
-
-        // Fallback string sanitization if catalogue resolution was not completed
-        if (!$isResolved) {
-            $lowerName = strtolower(trim($catalogueName));
+        // If catalogueName contains display suffixes (e.g. "86 Diamonds" or "Weekly pass x1"), sanitize/resolve it
+        $isDirectCode = preg_match('/^\d+$|^Weekly$|^Twilight$|^Weekly Elite Pack$|^Monthly Elite Pack$/i', $finalCatalogueName);
+        if (!$isDirectCode) {
+            $lowerName = strtolower($finalCatalogueName);
             if ((str_contains($lowerName, 'weekly pass') || str_contains($lowerName, 'weekly')) && !str_contains($lowerName, 'elite')) {
-                $catalogueName = 'Weekly';
+                $finalCatalogueName = 'Weekly';
             } elseif (str_contains($lowerName, 'weekly elite')) {
-                $catalogueName = 'Weekly Elite Pack';
+                $finalCatalogueName = 'Weekly Elite Pack';
             } elseif (str_contains($lowerName, 'twilight')) {
-                $catalogueName = 'Twilight';
+                $finalCatalogueName = 'Twilight';
             } elseif (str_contains($lowerName, 'monthly')) {
-                $catalogueName = 'Monthly Elite Pack';
+                $finalCatalogueName = 'Monthly Elite Pack';
             } else {
                 $numOnly = preg_replace('/[^0-9]/', '', $lowerName);
                 if (!empty($numOnly)) {
-                    $catalogueName = $numOnly; // e.g. "86 Diamonds" -> "86"
+                    $finalCatalogueName = $numOnly; // e.g. "86 Diamonds" -> "86"
                 }
             }
         }
 
-        // 2. Submit order to G2Bulk
-        $url = "{$this->baseUrl}/games/{$gameCode}/order";
+        // 3. Submit order to G2Bulk
+        $url = "{$this->baseUrl}/games/{$finalGameCode}/order";
         $payload = [
-            'catalogue_name' => $catalogueName,
-            'player_id' => $playerId,
-            'server_id' => $serverId ?: '',
+            'catalogue_name' => $finalCatalogueName,
+            'player_id' => trim($playerId),
+            'server_id' => $serverId ? trim($serverId) : '',
             'charname' => '',
             'remark' => 'Order No: ' . $orderNo,
             'callback_url' => url('/api/v1/webhooks/g2bulk'),
@@ -236,7 +200,7 @@ class G2BulkService
         $startTime = microtime(true);
 
         try {
-            $response = Http::retry(3, 1000)
+            $response = Http::retry(2, 800)
                 ->timeout(12)
                 ->withHeaders([
                     'X-API-Key' => $this->apiKey,
@@ -248,6 +212,7 @@ class G2BulkService
             $resBody = $response->json() ?? [];
             $statusCode = $response->status();
 
+            // Log transaction silently to MongoDB api_logs collection
             $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode, $latencyMs, null, $orderNo, $playerId);
 
             if ($response->successful()) {
@@ -256,82 +221,41 @@ class G2BulkService
                     'code' => 'SUCCESS',
                     'message' => 'Order submitted to G2Bulk successfully.',
                     'data' => [
-                        'order_id' => $resBody['order']['order_id'] ?? null,
-                    ],
-                    'latency_ms' => $latencyMs,
-                    'http_status' => $statusCode,
+                        'order_id' => $resBody['order_id'] ?? $resBody['id'] ?? null,
+                        'status' => $resBody['status'] ?? 'PROCESSING',
+                        'raw_response' => $resBody,
+                    ]
                 ];
             }
 
-            $rawMsg = strtolower($resBody['message'] ?? '');
+            // Structured G2Bulk error handling
+            $errorMsg = $resBody['message'] ?? 'Provider error occurred.';
+            $errorCode = 'PROVIDER_ERROR';
 
-            // Out of stock detection
-            if (str_contains($rawMsg, 'stock') || str_contains($rawMsg, 'insufficient') || str_contains($rawMsg, 'unavailable')) {
-                return [
-                    'success' => false,
-                    'code' => 'OUT_OF_STOCK',
-                    'message' => $resBody['message'] ?? 'Wholesaler package is currently out of stock.',
-                    'data' => $resBody,
-                    'latency_ms' => $latencyMs,
-                    'http_status' => $statusCode,
-                ];
-            }
-
-            // Invalid player detection
-            if (str_contains($rawMsg, 'invalid') || str_contains($rawMsg, 'user not found') || str_contains($rawMsg, 'character')) {
-                return [
-                    'success' => false,
-                    'code' => 'INVALID_PLAYER',
-                    'message' => $resBody['message'] ?? 'Invalid player ID or server ID.',
-                    'data' => $resBody,
-                    'latency_ms' => $latencyMs,
-                    'http_status' => $statusCode,
-                ];
-            }
-
-            // Duplicate order detection
-            if (str_contains($rawMsg, 'duplicate') || str_contains($rawMsg, 'already exists')) {
-                return [
-                    'success' => false,
-                    'code' => 'DUPLICATE_ORDER',
-                    'message' => $resBody['message'] ?? 'Duplicate order submission detected.',
-                    'data' => $resBody,
-                    'latency_ms' => $latencyMs,
-                    'http_status' => $statusCode,
-                ];
+            if ($statusCode === 404) {
+                $errorCode = 'CATALOGUE_NOT_FOUND';
+            } elseif ($statusCode === 400 && str_contains(strtolower($errorMsg), 'player id')) {
+                $errorCode = 'INVALID_PLAYER_ID';
+            } elseif ($statusCode === 401) {
+                $errorCode = 'UNAUTHORIZED';
             }
 
             return [
                 'success' => false,
-                'code' => 'ERROR',
-                'message' => $resBody['message'] ?? 'Failed to submit order to G2Bulk wholesaler.',
-                'data' => $resBody,
-                'latency_ms' => $latencyMs,
-                'http_status' => $statusCode,
+                'code' => $errorCode,
+                'message' => "G2Bulk Error: {$errorMsg}",
+                'status_code' => $statusCode,
+                'data' => $resBody
             ];
-        } catch (\Illuminate\Http\Client\ConnectionException $e) {
-            $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
-            $this->logTransaction($url, 'POST', $payload, null, 504, $latencyMs, $e->getMessage(), $orderNo, $playerId);
 
-            return [
-                'success' => false,
-                'code' => 'TIMEOUT',
-                'message' => 'Connection to G2Bulk order gateway timed out.',
-                'data' => null,
-                'latency_ms' => $latencyMs,
-                'http_status' => 504,
-            ];
         } catch (\Exception $e) {
             $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
             $this->logTransaction($url, 'POST', $payload, null, 500, $latencyMs, $e->getMessage(), $orderNo, $playerId);
 
             return [
                 'success' => false,
-                'code' => 'ERROR',
-                'message' => 'Order placement exception: ' . $e->getMessage(),
-                'data' => null,
-                'latency_ms' => $latencyMs,
-                'http_status' => 500,
+                'code' => 'NETWORK_ERROR',
+                'message' => 'Provider timeout or network connectivity issue: ' . $e->getMessage(),
             ];
         }
     }

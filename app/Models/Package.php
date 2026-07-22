@@ -11,6 +11,10 @@ class Package extends Model
 
     protected $fillable = [
         'game_id',
+        'provider',
+        'provider_game_code',
+        'provider_catalogue_id',
+        'provider_catalogue_name',
         'name_en',
         'name_kh',
         'price_usd',
