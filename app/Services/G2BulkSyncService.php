@@ -68,9 +68,33 @@ class G2BulkSyncService
      * Synchronize G2Bulk packages into MongoDB.
      * Preserves custom admin selling prices and updates provider prices & metadata.
      */
+    /**
+     * Purge targeted Redis cache keys related to a game or home page. NEVER flush global Redis!
+     */
+    public static function purgeTargetedCache(?string $gameSlug = null): void
+    {
+        Cache::forget('home_page_data_v1');
+        Cache::forget('featured_games');
+        Cache::forget('active_banners');
+
+        if ($gameSlug) {
+            $cleanSlug = str_replace([' ', '%20'], '-', trim(strtolower($gameSlug)));
+            Cache::forget("game_{$cleanSlug}");
+            Cache::forget("game_{$gameSlug}");
+            Cache::forget("packages_{$cleanSlug}");
+            Cache::forget("packages_{$gameSlug}");
+        }
+    }
+
+    /**
+     * Synchronize G2Bulk packages into MongoDB.
+     * Preserves custom admin selling prices and updates provider prices & stock status.
+     */
     public function syncAllPackages(float $markupPercentage = 10.0): array
     {
         $results = [];
+        $telegramService = app(TelegramNotificationService::class);
+        $stockNotifyService = app(StockNotificationService::class);
 
         foreach (self::GAME_MAPPINGS as $gameSlug => $g2bCode) {
             $game = Game::where('slug', $gameSlug)->first();
@@ -86,6 +110,8 @@ class G2BulkSyncService
             }
 
             $syncedCount = 0;
+            $recoveredCount = 0;
+
             foreach ($catalogues as $item) {
                 $providerPriceUsd = round((float)($item['amount'] ?? 0), 2);
                 $providerPriceKhr = (int)round($providerPriceUsd * 4100);
@@ -93,12 +119,21 @@ class G2BulkSyncService
                 preg_match('/\d+/', (string)$item['name'], $matches);
                 $points = isset($matches[0]) ? (int)$matches[0] : 0;
 
+                // Determine provider stock status from API item if provided
+                $itemStockStatus = 'available';
+                if (isset($item['status']) && in_array(strtolower($item['status']), ['inactive', 'out_of_stock', 'disabled'])) {
+                    $itemStockStatus = 'out_of_stock';
+                }
+
                 // Locate existing package by game_id and provider_catalogue_name
                 $package = Package::where('game_id', $game->id)
                     ->where('provider_catalogue_name', (string)$item['name'])
                     ->first();
 
                 if ($package) {
+                    $oldStockStatus = $package->stock_status;
+                    $newStockStatus = $itemStockStatus;
+
                     // Update ONLY provider metadata & provider prices. DO NOT overwrite selling_price_usd!
                     $package->provider = 'g2bulk';
                     $package->provider_game_code = $g2bCode;
@@ -106,6 +141,9 @@ class G2BulkSyncService
                     $package->provider_catalogue_name = (string)$item['name'];
                     $package->provider_price_usd = $providerPriceUsd;
                     $package->provider_price_khr = $providerPriceKhr;
+                    $package->stock_status = $newStockStatus;
+                    $package->last_stock_check_at = now();
+                    $package->provider_stock_message = 'Synchronized from G2Bulk API';
 
                     // Ensure selling_price_usd exists
                     if (!$package->selling_price_usd) {
@@ -121,6 +159,33 @@ class G2BulkSyncService
 
                     $package->recalculateProfit();
                     $package->save();
+
+                    // Detect Stock Recovery Transition (out_of_stock -> available)
+                    if ($oldStockStatus === 'out_of_stock' && $newStockStatus === 'available') {
+                        $recoveredCount++;
+
+                        // Log Stock Audit Entry
+                        \App\Models\StockAuditLog::create([
+                            'package_id' => $package->id,
+                            'game_id' => $game->id,
+                            'package_name' => $package->name_en,
+                            'game_name' => $game->name_en,
+                            'old_status' => 'out_of_stock',
+                            'new_status' => 'available',
+                            'provider_response' => $item,
+                            'triggered_by' => 'sync',
+                            'created_at' => now(),
+                        ]);
+
+                        // Clear Targeted Redis Cache
+                        self::purgeTargetedCache($game->slug);
+
+                        // Send Telegram Recovered Alert
+                        $telegramService->notifyProviderRecovered($game->name_en, $package->name_en);
+
+                        // Notify subscribed customers
+                        $stockNotifyService->notifySubscribers($package->id);
+                    }
                 } else {
                     // Create new package record with default markup
                     $defaultSellingUsd = round($providerPriceUsd * (1 + ($markupPercentage / 100)), 2);
@@ -148,16 +213,22 @@ class G2BulkSyncService
                         'points_or_diamonds' => $points,
                         'bonus_points' => 0,
                         'is_active' => true,
+                        'stock_status' => $itemStockStatus,
+                        'last_stock_check_at' => now(),
+                        'provider_stock_message' => 'Created via G2Bulk Sync',
                     ]);
                 }
 
                 $syncedCount++;
             }
 
+            self::purgeTargetedCache($game->slug);
+
             $results[$gameSlug] = [
                 'success' => true,
                 'provider_game_code' => $g2bCode,
-                'synced_count' => $syncedCount
+                'synced_count' => $syncedCount,
+                'recovered_count' => $recoveredCount,
             ];
         }
 

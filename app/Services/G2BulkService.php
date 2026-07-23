@@ -89,12 +89,22 @@ class G2BulkService
 
             $this->logTransaction($url, 'POST', $payload, $resBody, $statusCode, $latencyMs, null, null, $playerId);
 
-            if ($response->successful() && isset($resBody['valid']) && $resBody['valid'] === 'valid') {
+            $nickname = $resBody['name'] ?? $resBody['nickname'] ?? $resBody['username'] ?? $resBody['charname'] ?? $resBody['player_name'] ?? null;
+            $isValid = $response->successful() && (
+                ($resBody['valid'] ?? null) === 'valid' ||
+                ($resBody['valid'] ?? null) === true ||
+                ($resBody['success'] ?? null) === true ||
+                ($resBody['status'] ?? null) === 'success' ||
+                ($resBody['status'] ?? null) === true ||
+                !empty($nickname)
+            );
+
+            if ($isValid && !empty($nickname)) {
                 return [
                     'success' => true,
                     'code' => 'SUCCESS',
                     'message' => 'Player details verified.',
-                    'nickname' => $resBody['name'] ?? 'Verified Account',
+                    'nickname' => (string) $nickname,
                     'data' => $resBody,
                     'latency_ms' => $latencyMs,
                     'http_status' => $statusCode,
@@ -240,25 +250,66 @@ class G2BulkService
                 ];
             }
 
-            // Structured G2Bulk error handling
-            $errorMsg = $resBody['message'] ?? 'Provider error occurred.';
-            $errorCode = 'PROVIDER_ERROR';
+            // Structured G2Bulk error handling using ProviderError mapper
+            $rawErrorMsg = $resBody['message'] ?? 'Provider error occurred.';
+            $errorCode = \App\Enums\ProviderError::mapG2BulkError($rawErrorMsg, $statusCode);
+            $friendlyMsg = \App\Enums\ProviderError::getCustomerFriendlyMessage($errorCode);
 
-            $lowerMsg = strtolower($errorMsg);
-            if (str_contains($lowerMsg, 'balance') || str_contains($lowerMsg, 'insufficient')) {
-                $errorCode = 'INSUFFICIENT_BALANCE';
-            } elseif ($statusCode === 404) {
-                $errorCode = 'CATALOGUE_NOT_FOUND';
-            } elseif ($statusCode === 400 && (str_contains($lowerMsg, 'player') || str_contains($lowerMsg, 'user'))) {
-                $errorCode = 'INVALID_PLAYER_ID';
-            } elseif ($statusCode === 401) {
-                $errorCode = 'UNAUTHORIZED';
+            // Auto-update Package stock status if OUT_OF_STOCK / CATALOGUE_INACTIVE / CATALOGUE_NOT_FOUND
+            if (in_array($errorCode, [\App\Enums\ProviderError::OUT_OF_STOCK, \App\Enums\ProviderError::CATALOGUE_INACTIVE, \App\Enums\ProviderError::CATALOGUE_NOT_FOUND])) {
+                try {
+                    $package = \App\Models\Package::where('provider_catalogue_name', $catalogueName)->first();
+                    if (!$package) {
+                        $game = \App\Models\Game::where('slug', $gameCode)->first();
+                        if ($game) {
+                            $package = \App\Models\Package::where('game_id', $game->id)->first();
+                        }
+                    }
+
+                    if ($package && $package->stock_status !== 'out_of_stock') {
+                        $oldStatus = $package->stock_status;
+                        $package->stock_status = 'out_of_stock';
+                        $package->last_stock_check_at = now();
+                        $package->provider_stock_message = "Auto-detected out of stock during order placement ({$rawErrorMsg})";
+                        $package->save();
+
+                        // Log Stock Audit Entry
+                        \App\Models\StockAuditLog::create([
+                            'package_id' => $package->id,
+                            'game_id' => $package->game_id,
+                            'package_name' => $package->name_en,
+                            'game_name' => $package->game ? $package->game->name_en : 'Unknown Game',
+                            'old_status' => $oldStatus,
+                            'new_status' => 'out_of_stock',
+                            'provider_response' => $resBody,
+                            'triggered_by' => 'order_fulfillment',
+                            'created_at' => now(),
+                        ]);
+
+                        // Clear Targeted Cache
+                        G2BulkSyncService::purgeTargetedCache($gameCode);
+
+                        // Send Telegram Out of Stock Notification
+                        $telegramService = app(TelegramNotificationService::class);
+                        $waitingCount = \App\Models\Order::where('status', \App\Enums\OrderStatus::WAITING_PROVIDER)->count();
+                        $telegramService->notifyOutOfStock(
+                            $orderNo,
+                            $package->game ? $package->game->name_en : 'Game',
+                            $package->name_en,
+                            $rawErrorMsg,
+                            $waitingCount
+                        );
+                    }
+                } catch (\Exception $ex) {
+                    Log::warning("Failed to auto-update package stock status on G2Bulk error: " . $ex->getMessage());
+                }
             }
 
             return [
                 'success' => false,
                 'code' => $errorCode,
-                'message' => "G2Bulk Error: {$errorMsg}",
+                'message' => $friendlyMsg,
+                'raw_message' => $rawErrorMsg,
                 'status_code' => $statusCode,
                 'data' => $resBody
             ];

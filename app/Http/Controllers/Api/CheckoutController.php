@@ -105,6 +105,12 @@ class CheckoutController extends Controller
                 'data' => $order
             ], 201);
 
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            return response()->json([
+                'success' => false,
+                'code' => 'OUT_OF_STOCK',
+                'message' => $e->getMessage()
+            ], $e->getStatusCode());
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -154,6 +160,12 @@ class CheckoutController extends Controller
                 'success' => true,
                 'data' => $khqrResponse
             ]);
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            return response()->json([
+                'success' => false,
+                'code' => 'OUT_OF_STOCK',
+                'message' => $e->getMessage()
+            ], $e->getStatusCode());
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,

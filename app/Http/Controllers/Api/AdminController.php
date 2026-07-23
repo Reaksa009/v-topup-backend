@@ -398,7 +398,12 @@ class AdminController extends Controller
     // --- Packages (Products) Management ---
     public function packages(Request $request)
     {
-        $packages = Package::with('game')->get();
+        $query = Package::with('game');
+        if ($request->has('stock_status') && !empty($request->stock_status) && $request->stock_status !== 'all') {
+            $query->where('stock_status', strtolower($request->stock_status));
+        }
+
+        $packages = $query->get();
         $mapped = $packages->map(function ($p) {
             $providerPrice = (float)($p->provider_price_usd ?? $p->original_price_usd ?? 0.0);
             $sellingPrice = (float)($p->selling_price_usd ?? $p->price_usd ?? 0.0);
@@ -428,12 +433,142 @@ class AdminController extends Controller
                 'discount_pct' => $p->original_price_usd > $sellingPrice ? round((($p->original_price_usd - $sellingPrice) / $p->original_price_usd) * 100) : 0,
                 'is_available' => $p->is_active,
                 'is_active' => $p->is_active,
+                'stock_status' => strtolower((string)($p->stock_status ?? 'available')),
+                'last_stock_check_at' => $p->last_stock_check_at ? (string)$p->last_stock_check_at : null,
+                'provider_stock_message' => $p->provider_stock_message ?? '',
             ];
         });
 
         return response()->json([
             'success' => true,
             'data' => $mapped
+        ]);
+    }
+
+    /**
+     * Admin manual override package stock status (Force Available, Force Limited, Force Out of Stock).
+     */
+    public function forcePackageStockStatus(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'stock_status' => 'required|in:available,limited,out_of_stock',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
+        }
+
+        $package = Package::find($id);
+        if (!$package) {
+            return response()->json(['success' => false, 'message' => 'Package not found.'], 404);
+        }
+
+        $oldStatus = $package->stock_status;
+        $newStatus = strtolower($request->stock_status);
+        $admin = $request->user();
+
+        $package->stock_status = $newStatus;
+        $package->last_stock_check_at = now();
+        $package->provider_stock_message = "Admin override by " . ($admin->name ?? 'Admin') . ": " . $request->reason;
+        $package->save();
+
+        // Create Stock Audit Log
+        \App\Models\StockAuditLog::create([
+            'package_id' => $package->id,
+            'game_id' => $package->game_id,
+            'package_name' => $package->name_en,
+            'game_name' => $package->game ? $package->game->name_en : 'Unknown Game',
+            'old_status' => $oldStatus,
+            'new_status' => $newStatus,
+            'admin_id' => $admin->id ?? null,
+            'admin_name' => $admin->name ?? 'Admin',
+            'reason' => $request->reason,
+            'ip_address' => $request->ip(),
+            'triggered_by' => 'admin_override',
+            'created_at' => now(),
+        ]);
+
+        // Purge targeted cache
+        $game = Game::find($package->game_id);
+        \App\Services\G2BulkSyncService::purgeTargetedCache($game ? $game->slug : null);
+
+        // If forced to available, notify subscribers
+        if ($newStatus === 'available') {
+            app(\App\Services\StockNotificationService::class)->notifySubscribers($package->id);
+            app(\App\Services\TelegramNotificationService::class)->notifyProviderRecovered(
+                $game ? $game->name_en : 'Game',
+                $package->name_en
+            );
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Stock status updated to '{$newStatus}' successfully.",
+            'data' => $package
+        ]);
+    }
+
+    /**
+     * Admin Analytics Widgets Data for Stock & Provider Performance.
+     */
+    public function stockAnalytics(Request $request)
+    {
+        $outOfStockCount = Package::where('stock_status', 'out_of_stock')->count();
+        $limitedCount = Package::where('stock_status', 'limited')->count();
+        $availableCount = Package::where('stock_status', 'available')->count();
+        $totalPackages = Package::count();
+
+        $today = now()->startOfDay();
+        $recoveredToday = \App\Models\StockAuditLog::where('new_status', 'available')
+            ->where('old_status', 'out_of_stock')
+            ->where('created_at', '>=', $today)
+            ->count();
+
+        $waitingProviderOrders = \App\Models\Order::where('status', \App\Enums\OrderStatus::WAITING_PROVIDER)->get();
+        $waitingProviderCount = $waitingProviderOrders->count();
+
+        $avgWaitMinutes = 0;
+        if ($waitingProviderCount > 0) {
+            $totalMinutes = 0;
+            foreach ($waitingProviderOrders as $wo) {
+                $created = \Carbon\Carbon::parse($wo->created_at);
+                $totalMinutes += $created->diffInMinutes(now());
+            }
+            $avgWaitMinutes = round($totalMinutes / $waitingProviderCount, 1);
+        }
+
+        $totalCompleted = \App\Models\Order::where('status', \App\Enums\OrderStatus::COMPLETED)->count();
+        $totalOrders = \App\Models\Order::count();
+
+        $retrySuccessRate = $totalCompleted > 0 ? round(($totalCompleted / max(1, $totalOrders)) * 100, 1) : 100.0;
+        $providerFailureRate = $totalOrders > 0 ? round(($waitingProviderCount / $totalOrders) * 100, 1) : 0.0;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'out_of_stock_count' => $outOfStockCount,
+                'limited_count' => $limitedCount,
+                'available_count' => $availableCount,
+                'total_packages' => $totalPackages,
+                'recovered_today' => $recoveredToday,
+                'waiting_provider_count' => $waitingProviderCount,
+                'average_waiting_time_minutes' => $avgWaitMinutes,
+                'retry_success_rate' => $retrySuccessRate,
+                'provider_failure_rate' => $providerFailureRate,
+            ]
+        ]);
+    }
+
+    /**
+     * Fetch Stock Audit Logs.
+     */
+    public function stockAuditLogs(Request $request)
+    {
+        $logs = \App\Models\StockAuditLog::orderBy('created_at', 'desc')->take(100)->get();
+        return response()->json([
+            'success' => true,
+            'data' => $logs
         ]);
     }
 

@@ -73,6 +73,11 @@ class CheckoutService
                     throw new \Exception("Package not found.");
                 }
 
+                // Checkpoint #1: Stock Validation prior to payment/order creation
+                if ($package->stock_status === 'out_of_stock') {
+                    throw new \Symfony\Component\HttpKernel\Exception\HttpException(409, "This package is temporarily unavailable.");
+                }
+
                 $sellingPriceUsd = (float)($package->selling_price_usd ?? $package->price_usd ?? 0.0);
                 $sellingPriceKhr = (int)($package->selling_price_khr ?? $package->price_khr ?? round($sellingPriceUsd * 4100));
                 $providerPriceUsd = (float)($package->provider_price_usd ?? $package->original_price_usd ?? 0.0);
@@ -196,6 +201,11 @@ class CheckoutService
             $package = $game->packages()->find($item['package_id']);
             if (!$package) {
                 throw new \Exception("Package not found.");
+            }
+
+            // Checkpoint #1: Stock Validation prior to KHQR payment creation
+            if ($package->stock_status === 'out_of_stock') {
+                throw new \Symfony\Component\HttpKernel\Exception\HttpException(409, "This package is temporarily unavailable.");
             }
 
             $itemSubtotal = (float) $package->price_usd * (int) $item['qty'];

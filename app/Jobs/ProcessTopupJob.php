@@ -42,11 +42,40 @@ class ProcessTopupJob implements ShouldQueue
             return;
         }
 
+        // Checkpoint #2: Reload fresh package from database immediately prior to G2Bulk submission
+        $package = \App\Models\Package::find($order->package_id);
+        if ($package && $package->stock_status === 'out_of_stock') {
+            Log::warning("ProcessTopupJob Checkpoint #2: Package ID {$package->id} is OUT_OF_STOCK. Halting fulfillment for Order {$order->order_no}.");
+
+            $nextMinutes = OrderRetryService::getBackoffMinutes((int)($order->retry_count ?? 0));
+            $order->status = OrderStatus::WAITING_PROVIDER;
+            $order->waiting_reason = "Provider Out Of Stock (Checkpoint #2 Pre-Fulfillment Detection)";
+            $order->retry_count = (int)($order->retry_count ?? 0);
+            $order->last_retry_at = now();
+            $order->next_retry_at = now()->addMinutes($nextMinutes);
+            $order->estimated_retry_at = now()->addMinutes($nextMinutes);
+            $order->provider_status_snapshot = [
+                'code' => 'OUT_OF_STOCK',
+                'message' => 'Package detected as out of stock prior to fulfillment.',
+                'timestamp' => now()->toIso8601String(),
+            ];
+            $order->save();
+
+            $waitingCount = Order::where('status', OrderStatus::WAITING_PROVIDER)->count();
+            $telegramService->notifyOutOfStock(
+                $order->order_no,
+                $order->game_name,
+                $order->package_name,
+                'Package detected out of stock pre-fulfillment',
+                $waitingCount
+            );
+            return;
+        }
+
         // Update status to processing
         $order->status = OrderStatus::PROCESSING;
         $order->save();
 
-        $package = \App\Models\Package::find($order->package_id);
         $providerGameCode = $order->provider_game_code ?? ($package->provider_game_code ?? 'mlbb');
         $providerCatalogueName = $order->provider_catalogue_name ?? ($package->provider_catalogue_name ?? $order->package_name);
 
@@ -76,41 +105,45 @@ class ProcessTopupJob implements ShouldQueue
         } else {
             $code = $res['code'] ?? 'ERROR';
             $msg = $res['message'] ?? 'Topup failed.';
+            $rawMsg = $res['raw_message'] ?? $msg;
 
-            // REQUIREMENT: Provider unavailable or insufficient wholesaler balance -> WAITING_PROVIDER_BALANCE
-            if (in_array($code, ['PROVIDER_UNAVAILABLE', 'INSUFFICIENT_BALANCE', 'WAITING_PROVIDER_BALANCE'])) {
-                $order->status = OrderStatus::WAITING_PROVIDER_BALANCE;
-                $order->waiting_reason = "Provider balance insufficient or offline ({$code}: {$msg})";
+            $nextMinutes = OrderRetryService::getBackoffMinutes((int)($order->retry_count ?? 0));
+
+            // Out of stock or provider unavailable -> Move to WAITING_PROVIDER with retry schedule
+            if (in_array($code, [\App\Enums\ProviderError::OUT_OF_STOCK, \App\Enums\ProviderError::CATALOGUE_INACTIVE, \App\Enums\ProviderError::CATALOGUE_NOT_FOUND, 'PROVIDER_UNAVAILABLE', 'INSUFFICIENT_BALANCE'])) {
+                $order->status = OrderStatus::WAITING_PROVIDER;
+                $order->waiting_reason = "Provider temporarily unavailable ({$code}: {$msg})";
                 $order->provider_status_snapshot = [
                     'code' => $code,
-                    'message' => $msg,
+                    'message' => $rawMsg,
                     'timestamp' => now()->toIso8601String(),
                 ];
                 $order->retry_attempts = ($order->retry_attempts ?? 0) + 1;
+                $order->retry_count = (int)($order->retry_count ?? 0);
+                $order->last_retry_at = now();
+                $order->next_retry_at = now()->addMinutes($nextMinutes);
+                $order->estimated_retry_at = now()->addMinutes($nextMinutes);
                 $order->save();
 
-                Log::warning("Order {$order->order_no} placed in WAITING_PROVIDER_BALANCE queue due to: {$code} - {$msg}");
+                Log::warning("Order {$order->order_no} placed in WAITING_PROVIDER queue due to: {$code} - {$msg}");
 
-                // Notify admin of waiting queue increase
-                $waitingCount = Order::where('status', OrderStatus::WAITING_PROVIDER_BALANCE)->count();
-                $threshold = (int) config('services.provider.queue_threshold', 5);
-                if ($waitingCount >= $threshold) {
-                    $telegramService->notifyQueueThresholdExceeded($waitingCount, $threshold);
-                }
-            } elseif ($code === 'OUT_OF_STOCK') {
-                $order->status = OrderStatus::WAITING_VERIFICATION;
-                $order->waiting_reason = "Provider out of stock";
-                $order->save();
-
+                $waitingCount = Order::where('status', OrderStatus::WAITING_PROVIDER)->count();
                 $telegramService->notifyOutOfStock(
                     $order->order_no,
                     $order->game_name,
-                    $order->package_name
+                    $order->package_name,
+                    $rawMsg,
+                    $waitingCount
                 );
             } else {
-                // Other unexpected failures -> WAITING_VERIFICATION for admin review (Customer money is preserved)
+                // Invalid credentials or other errors -> WAITING_VERIFICATION for admin review (Customer money is preserved)
                 $order->status = OrderStatus::WAITING_VERIFICATION;
                 $order->waiting_reason = "Code: {$code} - {$msg}";
+                $order->provider_status_snapshot = [
+                    'code' => $code,
+                    'message' => $rawMsg,
+                    'timestamp' => now()->toIso8601String(),
+                ];
                 $order->save();
 
                 $telegramService->notifyTopupFailed(

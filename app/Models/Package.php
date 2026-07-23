@@ -30,6 +30,9 @@ class Package extends Model
         'points_or_diamonds',
         'bonus_points',
         'is_active',
+        'stock_status', // available, limited, out_of_stock
+        'last_stock_check_at',
+        'provider_stock_message',
     ];
 
     protected $casts = [
@@ -40,7 +43,13 @@ class Package extends Model
         'points_or_diamonds' => 'integer',
         'bonus_points' => 'integer',
         'is_active' => 'boolean',
+        'last_stock_check_at' => 'datetime',
     ];
+
+    public function getStockStatusAttribute($value): string
+    {
+        return strtolower((string)($value ?? 'available'));
+    }
 
     /**
      * Safely cast BSON Decimal128 or string values to float.

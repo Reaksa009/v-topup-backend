@@ -40,6 +40,10 @@ class Order extends Model
         'waiting_reason',
         'provider_status_snapshot',
         'retry_attempts',
+        'retry_count',
+        'last_retry_at',
+        'next_retry_at',
+        'estimated_retry_at',
         'completed_at',
     ];
 
@@ -56,6 +60,10 @@ class Order extends Model
         'total_price_usd' => 'float',
         'total_price_khr' => 'integer',
         'retry_attempts' => 'integer',
+        'retry_count' => 'integer',
+        'last_retry_at' => 'datetime',
+        'next_retry_at' => 'datetime',
+        'estimated_retry_at' => 'datetime',
     ];
 
     public function user()

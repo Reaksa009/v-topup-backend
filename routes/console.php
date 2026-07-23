@@ -10,3 +10,6 @@ Artisan::command('inspire', function () {
 
 // Schedule 5-minute G2Bulk Wholesaler Wallet Balance Monitoring & Circuit Breaker Check
 Schedule::command('g2bulk:check-balance')->everyFiveMinutes();
+
+// Schedule 5-minute Automatic Retry Engine for WAITING_PROVIDER Orders
+Schedule::command('orders:retry-waiting')->everyFiveMinutes();

@@ -86,15 +86,35 @@ class TelegramNotificationService
     }
 
     /**
-     * Helper notification: Out Of Stock
+     * Helper notification: Provider Out Of Stock Alert
      */
-    public function notifyOutOfStock(string $orderNo, string $gameName, string $packageName): bool
+    public function notifyOutOfStock(string $orderNo, string $gameName, string $packageName, string $reason = 'Provider out of stock', int $ordersWaitingCount = 0, float $providerBalance = 0.0): bool
     {
-        $msg = "⚠️ <b>Provider Out of Stock!</b>\n\n" .
-               "• <b>Order No:</b> <code>{$orderNo}</code>\n" .
+        $timeStr = now()->toDateTimeString();
+        $msg = "🚨 <b>PROVIDER_OUT_OF_STOCK</b>\n\n" .
                "• <b>Game:</b> {$gameName}\n" .
                "• <b>Package:</b> {$packageName}\n" .
-               "• <b>Action:</b> Order queued in WAITING_VERIFICATION for admin manual retry.";
+               "• <b>Provider:</b> G2Bulk\n" .
+               "• <b>Order No:</b> <code>{$orderNo}</code>\n" .
+               "• <b>Reason:</b> {$reason}\n" .
+               "• <b>Orders Waiting:</b> {$ordersWaitingCount}\n" .
+               "• <b>Provider Balance:</b> \$" . number_format($providerBalance, 2) . "\n" .
+               "• <b>Time:</b> {$timeStr}";
+        return $this->sendAdminAlert($msg);
+    }
+
+    /**
+     * Helper notification: Provider Stock Recovered Alert
+     */
+    public function notifyProviderRecovered(string $gameName, string $packageName, int $waitingDispatchedCount = 0): bool
+    {
+        $timeStr = now()->toDateTimeString();
+        $msg = "🟢 <b>PROVIDER_RECOVERED</b>\n\n" .
+               "• <b>Game:</b> {$gameName}\n" .
+               "• <b>Package:</b> {$packageName}\n" .
+               "• <b>Provider:</b> G2Bulk\n" .
+               "• <b>Recovered Time:</b> {$timeStr}\n" .
+               "• <b>Waiting Orders Dispatched:</b> {$waitingDispatchedCount}";
         return $this->sendAdminAlert($msg);
     }
 

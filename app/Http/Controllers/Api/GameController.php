@@ -106,44 +106,51 @@ class GameController extends Controller
             ], 404);
         }
 
-        $packages = $game->packages ? $game->packages->map(function ($p) {
-            $providerPrice = (float)(string)($p->provider_price_usd ?? $p->original_price_usd ?? 0.0);
-            $sellingPrice = (float)(string)($p->selling_price_usd ?? $p->price_usd ?? 0.0);
-            $sellingKhr = (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100));
-            $profitAmt = (float)(string)($p->profit_amount ?? round($sellingPrice - $providerPrice, 2));
-            $profitPct = (float)(string)($p->profit_percentage ?? ($providerPrice > 0 ? round(($profitAmt / $providerPrice) * 100, 2) : 0.0));
+        $cacheKey = "game_{$cleanSlug}";
 
-            return [
-                'id' => (string)$p->id,
-                'game_id' => (string)$p->game_id,
-                'provider' => $p->provider ?? 'g2bulk',
-                'provider_game_code' => $p->provider_game_code ?? 'mlbb',
-                'provider_catalogue_id' => $p->provider_catalogue_id ?? '',
-                'provider_catalogue_name' => $p->provider_catalogue_name ?? $p->name_en,
-                'name_en' => $p->name_en,
-                'name_kh' => $p->name_kh ?? $p->name_en,
-                'provider_price_usd' => $providerPrice,
-                'provider_price_khr' => (int)($p->provider_price_khr ?? round($providerPrice * 4100)),
-                'selling_price_usd' => $sellingPrice,
-                'selling_price_khr' => $sellingKhr,
-                'price_usd' => $sellingPrice,
-                'price_khr' => $sellingKhr,
-                'original_price_usd' => (float)(string)($p->original_price_usd ?? $providerPrice),
-                'profit_amount' => $profitAmt,
-                'profit_percentage' => $profitPct,
-                'points_or_diamonds' => (int)($p->points_or_diamonds ?? 0),
-                'bonus_points' => (int)($p->bonus_points ?? 0),
-                'is_active' => (bool)$p->is_active,
-            ];
-        })->values() : [];
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($game) {
+            $packages = $game->packages ? $game->packages->map(function ($p) {
+                $providerPrice = (float)(string)($p->provider_price_usd ?? $p->original_price_usd ?? 0.0);
+                $sellingPrice = (float)(string)($p->selling_price_usd ?? $p->price_usd ?? 0.0);
+                $sellingKhr = (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100));
+                $profitAmt = (float)(string)($p->profit_amount ?? round($sellingPrice - $providerPrice, 2));
+                $profitPct = (float)(string)($p->profit_percentage ?? ($providerPrice > 0 ? round(($profitAmt / $providerPrice) * 100, 2) : 0.0));
 
-        $gameData = $game->toArray();
-        $gameData['packages'] = $packages;
+                return [
+                    'id' => (string)$p->id,
+                    'game_id' => (string)$p->game_id,
+                    'provider' => $p->provider ?? 'g2bulk',
+                    'provider_game_code' => $p->provider_game_code ?? 'mlbb',
+                    'provider_catalogue_id' => $p->provider_catalogue_id ?? '',
+                    'provider_catalogue_name' => $p->provider_catalogue_name ?? $p->name_en,
+                    'name_en' => $p->name_en,
+                    'name_kh' => $p->name_kh ?? $p->name_en,
+                    'provider_price_usd' => $providerPrice,
+                    'provider_price_khr' => (int)($p->provider_price_khr ?? round($providerPrice * 4100)),
+                    'selling_price_usd' => $sellingPrice,
+                    'selling_price_khr' => $sellingKhr,
+                    'price_usd' => $sellingPrice,
+                    'price_khr' => $sellingKhr,
+                    'original_price_usd' => (float)(string)($p->original_price_usd ?? $providerPrice),
+                    'profit_amount' => $profitAmt,
+                    'profit_percentage' => $profitPct,
+                    'points_or_diamonds' => (int)($p->points_or_diamonds ?? 0),
+                    'bonus_points' => (int)($p->bonus_points ?? 0),
+                    'is_active' => (bool)$p->is_active,
+                    'stock_status' => strtolower((string)($p->stock_status ?? 'available')),
+                    'last_stock_check_at' => $p->last_stock_check_at ? (string)$p->last_stock_check_at : null,
+                    'provider_stock_message' => $p->provider_stock_message ?? '',
+                ];
+            })->values() : [];
 
-        return response()->json([
-            'success' => true,
-            'data' => $gameData
-        ]);
+            $gameData = $game->toArray();
+            $gameData['packages'] = $packages;
+
+            return response()->json([
+                'success' => true,
+                'data' => $gameData
+            ]);
+        });
     }
 
     public function search(Request $request)

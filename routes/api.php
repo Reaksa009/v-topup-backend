@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\GameController;
 use App\Http\Controllers\Api\CheckoutController;
 use App\Http\Controllers\Api\AdminController;
+use App\Http\Controllers\Api\StockNotificationController;
 
 /*
 |--------------------------------------------------------------------------
@@ -86,6 +87,7 @@ Route::middleware('throttle:30,1')->group(function () {
     Route::get('/orders/tracking/{orderNo}', [CheckoutController::class, 'trackOrder']);
     Route::post('/payments/generate-khqr', [CheckoutController::class, 'generateKhqr']);
     Route::get('/payments/check-khqr/{md5}', [CheckoutController::class, 'checkKhqrStatus']);
+    Route::post('/stock-notifications', [StockNotificationController::class, 'subscribe']);
 });
 
 // --- Protected Customer Area ---
@@ -118,6 +120,9 @@ Route::middleware(['auth:sanctum', \App\Http\Middleware\IsAdmin::class])->group(
     Route::post('/admin/packages', [AdminController::class, 'createPackage']);
     Route::put('/admin/packages/{id}', [AdminController::class, 'updatePackage']);
     Route::delete('/admin/packages/{id}', [AdminController::class, 'deletePackage']);
+    Route::post('/admin/packages/{id}/force-stock', [AdminController::class, 'forcePackageStockStatus']);
+    Route::get('/admin/stock-analytics', [AdminController::class, 'stockAnalytics']);
+    Route::get('/admin/stock-audit-logs', [AdminController::class, 'stockAuditLogs']);
     Route::get('/admin/price-audit-logs', [AdminController::class, 'priceAuditLogs']);
     
     Route::get('/admin/coupons', [AdminController::class, 'coupons']);
