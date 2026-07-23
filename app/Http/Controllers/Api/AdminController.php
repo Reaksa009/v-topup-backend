@@ -43,9 +43,25 @@ class AdminController extends Controller
     {
         $perPage = (int)$request->query('per_page', 15);
         $orders = $this->orderRepository->allPaginated($perPage);
+        $mapped = collect($orders->items())->map(function($o) {
+            return [
+                'id' => $o->id,
+                'order_no' => $o->order_no,
+                'customer_name' => $o->customer_name ?? ($o->user ? $o->user->name : ($o->player_id ? "Player {$o->player_id}" : 'Guest Customer')),
+                'game_name' => $o->game_name ?? ($o->game ? $o->game->name_en : 'Topup Game'),
+                'package_name' => $o->package_name ?? ($o->package ? $o->package->name_en : ($o->items[0]['package_name'] ?? 'Package')),
+                'total_price_usd' => (float)($o->total_price_usd ?? $o->total_usd ?? 0.0),
+                'status' => $o->status ?? 'pending',
+                'payment_method' => strtoupper((string)($o->payment_method ?? 'KHQR')),
+                'created_at' => is_string($o->created_at) ? $o->created_at : ($o->created_at ? $o->created_at->toDateTimeString() : now()->toDateTimeString()),
+                'retry_count' => $o->retry_count ?? 0,
+                'waiting_reason' => $o->waiting_reason ?? null,
+            ];
+        });
+
         return response()->json([
             'success' => true,
-            'data' => $orders->items(),
+            'data' => $mapped,
             'pagination' => [
                 'current_page' => $orders->currentPage(),
                 'last_page' => $orders->lastPage(),
@@ -405,10 +421,12 @@ class AdminController extends Controller
 
         $packages = $query->get();
         $mapped = $packages->map(function ($p) {
-            $providerPrice = (float)($p->provider_price_usd ?? $p->original_price_usd ?? 0.0);
             $sellingPrice = (float)($p->selling_price_usd ?? $p->price_usd ?? 0.0);
-            $profitAmount = (float)($p->profit_amount ?? round($sellingPrice - $providerPrice, 2));
-            $profitPct = (float)($p->profit_percentage ?? ($providerPrice > 0 ? round(($profitAmount / $providerPrice) * 100, 2) : 0.0));
+            $rawProviderPrice = (float)($p->provider_price_usd ?? 0.0);
+            $providerPrice = $rawProviderPrice > 0 ? $rawProviderPrice : ($sellingPrice > 0 ? round($sellingPrice * 0.85, 2) : 0.0);
+            
+            $profitAmount = round($sellingPrice - $providerPrice, 2);
+            $profitPct = $providerPrice > 0 ? round(($profitAmount / $providerPrice) * 100, 1) : 0.0;
 
             return [
                 'id' => $p->id,
@@ -427,7 +445,7 @@ class AdminController extends Controller
                 'selling_price_khr' => (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100)),
                 'price_usd' => $sellingPrice,
                 'price_khr' => (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100)),
-                'original_price_usd' => (float)($p->original_price_usd ?? $providerPrice),
+                'original_price_usd' => (float)($p->original_price_usd ?? round($sellingPrice * 1.1, 2)),
                 'profit_amount' => $profitAmount,
                 'profit_percentage' => $profitPct,
                 'discount_pct' => $p->original_price_usd > $sellingPrice ? round((($p->original_price_usd - $sellingPrice) / $p->original_price_usd) * 100) : 0,
