@@ -156,6 +156,10 @@ class CheckoutController extends Controller
                 $request->coupon_code
             );
 
+            if (isset($khqrResponse['data']['qr'])) {
+                $khqrResponse['data']['qr'] = str_replace('http://', 'https://', $khqrResponse['data']['qr']);
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => $khqrResponse
