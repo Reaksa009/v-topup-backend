@@ -109,15 +109,69 @@ class G2BulkSyncService
                 continue;
             }
 
+            // 1. Differentiate between Mobile Legends Global and Mobile Legends Regular
+            // Sync all MLBB catalogue items to both, allowing each to get full package coverage
+            $filteredList = $catalogues;
+
+            // 2. Deduplicate repeating point values: choose only the one that is cheaper (lowest amount)
+            $deduplicatedMap = [];
+            foreach ($filteredList as $item) {
+                $name = (string)($item['name'] ?? '');
+                $amount = round((float)($item['amount'] ?? 0), 2);
+                
+                preg_match('/\d+/', $name, $matches);
+                $points = isset($matches[0]) ? (int)$matches[0] : 0;
+                
+                // If it is a pass/membership without points, group by lowercase name
+                $key = $points > 0 ? "points_{$points}" : "name_" . trim(strtolower($name));
+                
+                if (!isset($deduplicatedMap[$key]) || $amount < $deduplicatedMap[$key]['amount']) {
+                    $deduplicatedMap[$key] = [
+                        'item' => $item,
+                        'amount' => $amount
+                    ];
+                }
+            }
+            $finalCatalogues = array_column($deduplicatedMap, 'item');
+
             $syncedCount = 0;
             $recoveredCount = 0;
+            $syncedPackageIds = [];
 
-            foreach ($catalogues as $item) {
+            foreach ($finalCatalogues as $item) {
                 $providerPriceUsd = round((float)($item['amount'] ?? 0), 2);
                 $providerPriceKhr = (int)round($providerPriceUsd * 4100);
 
                 preg_match('/\d+/', (string)$item['name'], $matches);
                 $points = isset($matches[0]) ? (int)$matches[0] : 0;
+
+                // 3. Guess if it's Best Selling vs Normal Package
+                $nameLower = strtolower((string)$item['name']);
+                $isBestSelling = false;
+                if (
+                    str_contains($nameLower, 'pass') || 
+                    str_contains($nameLower, 'weekly') || 
+                    str_contains($nameLower, 'membership') || 
+                    str_contains($nameLower, 'popular') || 
+                    str_contains($nameLower, 'best')
+                ) {
+                    $isBestSelling = true;
+                } else {
+                    // Match popular point values per game type
+                    if ($g2bCode === 'mlbb' && in_array($points, [56, 86, 172, 257, 344, 706])) {
+                        $isBestSelling = true;
+                    } elseif ($g2bCode === 'freefire_global' && in_array($points, [100, 210, 310, 530])) {
+                        $isBestSelling = true;
+                    } elseif ($g2bCode === 'pubgm' && in_array($points, [60, 325, 660, 1800])) {
+                        $isBestSelling = true;
+                    } elseif (str_contains($g2bCode, 'valorant') && in_array($points, [475, 1000, 2050])) {
+                        $isBestSelling = true;
+                    }
+                }
+
+                $packageType = $isBestSelling ? 'best_selling' : 'normal';
+                $isPopular = $isBestSelling ? 1 : 0;
+                $isPass = (str_contains($nameLower, 'pass') || str_contains($nameLower, 'weekly') || str_contains($nameLower, 'membership')) ? 1 : 0;
 
                 // Determine provider stock status from API item if provided
                 $itemStockStatus = 'available';
@@ -144,6 +198,9 @@ class G2BulkSyncService
                     $package->stock_status = $newStockStatus;
                     $package->last_stock_check_at = now();
                     $package->provider_stock_message = 'Synchronized from G2Bulk API';
+                    $package->package_type = $packageType;
+                    $package->is_popular = $isPopular;
+                    $package->is_pass = $isPass;
 
                     // Ensure selling_price_usd exists
                     if (!$package->selling_price_usd) {
@@ -159,6 +216,7 @@ class G2BulkSyncService
 
                     $package->recalculateProfit();
                     $package->save();
+                    $syncedPackageIds[] = $package->id;
 
                     // Detect Stock Recovery Transition (out_of_stock -> available)
                     if ($oldStockStatus === 'out_of_stock' && $newStockStatus === 'available') {
@@ -193,7 +251,7 @@ class G2BulkSyncService
                     $profitAmount = round($defaultSellingUsd - $providerPriceUsd, 2);
                     $profitPct = $providerPriceUsd > 0 ? round(($profitAmount / $providerPriceUsd) * 100, 2) : 0.0;
 
-                    Package::create([
+                    $newPkg = Package::create([
                         'game_id' => $game->id,
                         'provider' => 'g2bulk',
                         'provider_game_code' => $g2bCode,
@@ -216,11 +274,20 @@ class G2BulkSyncService
                         'stock_status' => $itemStockStatus,
                         'last_stock_check_at' => now(),
                         'provider_stock_message' => 'Created via G2Bulk Sync',
+                        'package_type' => $packageType,
+                        'is_popular' => $isPopular,
+                        'is_pass' => $isPass,
                     ]);
+                    $syncedPackageIds[] = $newPkg->id;
                 }
 
                 $syncedCount++;
             }
+
+            // Prune stale/mock packages of this game that were not present in the current sync batch
+            Package::where('game_id', $game->id)
+                ->whereNotIn('_id', $syncedPackageIds)
+                ->delete();
 
             self::purgeTargetedCache($game->slug);
 

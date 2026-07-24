@@ -33,6 +33,9 @@ class Package extends Model
         'stock_status', // available, limited, out_of_stock
         'last_stock_check_at',
         'provider_stock_message',
+        'package_type',
+        'is_popular',
+        'is_pass',
     ];
 
     protected $casts = [
@@ -43,6 +46,8 @@ class Package extends Model
         'points_or_diamonds' => 'integer',
         'bonus_points' => 'integer',
         'is_active' => 'boolean',
+        'is_popular' => 'integer',
+        'is_pass' => 'integer',
         'last_stock_check_at' => 'datetime',
     ];
 
