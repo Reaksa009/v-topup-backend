@@ -19,6 +19,7 @@ return [
     'allowed_origins' => [
         env('FRONTEND_URL', 'https://v-topup-frontend.vercel.app'),
         env('ADMIN_FRONTEND_URL', 'https://t-topup-admin.vercel.app'),
+        'https://frontendadmin-ochre.vercel.app',
         'http://localhost:5173',
         'http://localhost:5174',
         'http://localhost:3000',
@@ -28,6 +29,7 @@ return [
         '#^https://.*\-reaksas-projects-b17183b0\.vercel\.app$#',
         '#^https://v-topup-frontend.*\.vercel\.app$#',
         '#^https://t-topup-admin.*\.vercel\.app$#',
+        '#^https://frontendadmin.*\.vercel\.app$#',
     ],
 
     'allowed_headers' => ['*'],
