@@ -70,7 +70,10 @@ class CheckoutService
 
                 $package = $game->packages()->find($item['package_id']);
                 if (!$package) {
-                    throw new \Exception("Package not found.");
+                    $package = \App\Models\Package::find($item['package_id']);
+                }
+                if (!$package) {
+                    throw new \Exception("One of the packages in your cart is no longer available. Please clear your shopping cart and re-select your package.");
                 }
 
                 // Checkpoint #1: Stock Validation prior to payment/order creation
@@ -200,7 +203,10 @@ class CheckoutService
 
             $package = $game->packages()->find($item['package_id']);
             if (!$package) {
-                throw new \Exception("Package not found.");
+                $package = \App\Models\Package::find($item['package_id']);
+            }
+            if (!$package) {
+                throw new \Exception("One of the packages in your cart is no longer available. Please clear your shopping cart and re-select your package.");
             }
 
             // Checkpoint #1: Stock Validation prior to KHQR payment creation
