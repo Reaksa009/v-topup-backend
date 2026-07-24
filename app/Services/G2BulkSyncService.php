@@ -102,7 +102,14 @@ class G2BulkSyncService
                 continue;
             }
 
-            $catalogues = $this->fetchCatalogue($g2bCode, true);
+            $catalogues = $this->fetchCatalogue($g2bCode, false);
+            if ($g2bCode === 'mlbb') {
+                $globalCatalogues = $this->fetchCatalogue('mlbb_global', false);
+                if (!empty($globalCatalogues)) {
+                    $catalogues = array_merge($catalogues, $globalCatalogues);
+                }
+            }
+
             if (empty($catalogues)) {
                 $results[$gameSlug] = ['success' => false, 'message' => "Empty or invalid catalogue received for provider code '{$g2bCode}'."];
                 continue;
@@ -349,10 +356,12 @@ class G2BulkSyncService
     public function detectEvent(string $rawName): bool
     {
         $keywords = [
-            'event', 'promo', 'limited', 'special', 'anniversary', 'recharge',
-            'festival', 'lucky', 'bonus', 'season', 'msc', 'm series', 'm4', 'm5', 'm6',
+            'event', 'events', 'promo', 'promotion', 'limited', 'special', 'anniversary', 'recharge',
+            'festival', 'fest', 'lucky', 'bonus', 'season', 'msc', 'm series', 'm3', 'm4', 'm5', 'm6',
             'worlds', 'championship', 'summer', 'winter', 'new year', 'christmas',
-            'halloween', 'valentine', 'ramadan', 'khmer new year', 'songkran'
+            'halloween', 'valentine', 'ramadan', 'khmer new year', 'songkran',
+            'bundle', 'pack', 'chest', 'box', 'draw', 'drop', 'skin', 'crate', 'airdrop',
+            'super', 'hot', 'mega', 'offer', 'deal'
         ];
 
         $nameLower = strtolower($rawName);
