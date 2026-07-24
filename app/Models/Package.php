@@ -36,6 +36,18 @@ class Package extends Model
         'package_type',
         'is_popular',
         'is_pass',
+        'category_type', // best_selling, normal, weekly, monthly, pass, event, others
+        'subcategory',
+        'normalized_name',
+        'display_order',
+        'is_best_selling',
+        'is_event',
+        'duplicate_group',
+        'visible',
+        'admin_category_override',
+        'admin_best_selling_override',
+        'admin_display_order_override',
+        'admin_visible_override',
     ];
 
     protected $casts = [
@@ -46,8 +58,15 @@ class Package extends Model
         'points_or_diamonds' => 'integer',
         'bonus_points' => 'integer',
         'is_active' => 'boolean',
-        'is_popular' => 'integer',
-        'is_pass' => 'integer',
+        'is_popular' => 'boolean',
+        'is_pass' => 'boolean',
+        'display_order' => 'integer',
+        'is_best_selling' => 'boolean',
+        'is_event' => 'boolean',
+        'visible' => 'boolean',
+        'admin_best_selling_override' => 'boolean',
+        'admin_display_order_override' => 'integer',
+        'admin_visible_override' => 'boolean',
         'last_stock_check_at' => 'datetime',
     ];
 

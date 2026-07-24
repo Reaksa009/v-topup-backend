@@ -109,42 +109,57 @@ class GameController extends Controller
         $cacheKey = "game_{$cleanSlug}";
 
         return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($game) {
-            $packages = $game->packages ? $game->packages->map(function ($p) {
-                $providerPrice = (float)(string)($p->provider_price_usd ?? $p->original_price_usd ?? 0.0);
-                $sellingPrice = (float)(string)($p->selling_price_usd ?? $p->price_usd ?? 0.0);
-                $sellingKhr = (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100));
-                $profitAmt = (float)(string)($p->profit_amount ?? round($sellingPrice - $providerPrice, 2));
-                $profitPct = (float)(string)($p->profit_percentage ?? ($providerPrice > 0 ? round(($profitAmt / $providerPrice) * 100, 2) : 0.0));
+            $packages = $game->packages ? $game->packages
+                ->filter(function ($p) {
+                    return (bool)($p->visible ?? true);
+                })
+                ->sortBy(function ($p) {
+                    return (int)($p->display_order ?? 9999);
+                })
+                ->map(function ($p) {
+                    $providerPrice = (float)(string)($p->provider_price_usd ?? $p->original_price_usd ?? 0.0);
+                    $sellingPrice = (float)(string)($p->selling_price_usd ?? $p->price_usd ?? 0.0);
+                    $sellingKhr = (int)($p->selling_price_khr ?? $p->price_khr ?? round($sellingPrice * 4100));
+                    $profitAmt = (float)(string)($p->profit_amount ?? round($sellingPrice - $providerPrice, 2));
+                    $profitPct = (float)(string)($p->profit_percentage ?? ($providerPrice > 0 ? round(($profitAmt / $providerPrice) * 100, 2) : 0.0));
 
-                return [
-                    'id' => (string)$p->id,
-                    'game_id' => (string)$p->game_id,
-                    'provider' => $p->provider ?? 'g2bulk',
-                    'provider_game_code' => $p->provider_game_code ?? 'mlbb',
-                    'provider_catalogue_id' => $p->provider_catalogue_id ?? '',
-                    'provider_catalogue_name' => $p->provider_catalogue_name ?? $p->name_en,
-                    'name_en' => $p->name_en,
-                    'name_kh' => $p->name_kh ?? $p->name_en,
-                    'provider_price_usd' => $providerPrice,
-                    'provider_price_khr' => (int)($p->provider_price_khr ?? round($providerPrice * 4100)),
-                    'selling_price_usd' => $sellingPrice,
-                    'selling_price_khr' => $sellingKhr,
-                    'price_usd' => $sellingPrice,
-                    'price_khr' => $sellingKhr,
-                    'original_price_usd' => (float)(string)($p->original_price_usd ?? $providerPrice),
-                    'profit_amount' => $profitAmt,
-                    'profit_percentage' => $profitPct,
-                    'points_or_diamonds' => (int)($p->points_or_diamonds ?? 0),
-                    'bonus_points' => (int)($p->bonus_points ?? 0),
-                    'is_active' => (bool)$p->is_active,
-                    'package_type' => $p->package_type ?? 'normal',
-                    'is_popular' => (bool)($p->is_popular ?? false),
-                    'is_pass' => (bool)($p->is_pass ?? false),
-                    'stock_status' => strtolower((string)($p->stock_status ?? 'available')),
-                    'last_stock_check_at' => $p->last_stock_check_at ? (string)$p->last_stock_check_at : null,
-                    'provider_stock_message' => $p->provider_stock_message ?? '',
-                ];
-            })->values() : [];
+                    return [
+                        'id' => (string)$p->id,
+                        'game_id' => (string)$p->game_id,
+                        'provider' => $p->provider ?? 'g2bulk',
+                        'provider_game_code' => $p->provider_game_code ?? 'mlbb',
+                        'provider_catalogue_id' => $p->provider_catalogue_id ?? '',
+                        'provider_catalogue_name' => $p->provider_catalogue_name ?? $p->name_en,
+                        'name_en' => $p->name_en,
+                        'name_kh' => $p->name_kh ?? $p->name_en,
+                        'provider_price_usd' => $providerPrice,
+                        'provider_price_khr' => (int)($p->provider_price_khr ?? round($providerPrice * 4100)),
+                        'selling_price_usd' => $sellingPrice,
+                        'selling_price_khr' => $sellingKhr,
+                        'price_usd' => $sellingPrice,
+                        'price_khr' => $sellingKhr,
+                        'original_price_usd' => (float)(string)($p->original_price_usd ?? $providerPrice),
+                        'profit_amount' => $profitAmt,
+                        'profit_percentage' => $profitPct,
+                        'points_or_diamonds' => (int)($p->points_or_diamonds ?? 0),
+                        'bonus_points' => (int)($p->bonus_points ?? 0),
+                        'is_active' => (bool)$p->is_active,
+                        'package_type' => $p->package_type ?? 'normal',
+                        'is_popular' => (bool)($p->is_popular ?? false),
+                        'is_pass' => (bool)($p->is_pass ?? false),
+                        'category_type' => $p->category_type ?? ($p->is_popular ? 'best_selling' : 'normal'),
+                        'subcategory' => $p->subcategory ?? '',
+                        'normalized_name' => $p->normalized_name ?? $p->name_en,
+                        'display_order' => (int)($p->display_order ?? 9999),
+                        'is_best_selling' => (bool)($p->is_best_selling ?? $p->is_popular ?? false),
+                        'is_event' => (bool)($p->is_event ?? false),
+                        'duplicate_group' => $p->duplicate_group ?? $p->normalized_name ?? $p->name_en,
+                        'visible' => (bool)($p->visible ?? true),
+                        'stock_status' => strtolower((string)($p->stock_status ?? 'available')),
+                        'last_stock_check_at' => $p->last_stock_check_at ? (string)$p->last_stock_check_at : null,
+                        'provider_stock_message' => $p->provider_stock_message ?? '',
+                    ];
+                })->values() : [];
 
             $gameData = $game->toArray();
             $gameData['packages'] = $packages;

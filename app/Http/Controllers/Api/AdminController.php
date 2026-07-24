@@ -451,6 +451,14 @@ class AdminController extends Controller
                 'discount_pct' => $p->original_price_usd > $sellingPrice ? round((($p->original_price_usd - $sellingPrice) / $p->original_price_usd) * 100) : 0,
                 'is_available' => $p->is_active,
                 'is_active' => $p->is_active,
+                'category_type' => $p->category_type ?? ($p->is_popular ? 'best_selling' : 'normal'),
+                'subcategory' => $p->subcategory ?? '',
+                'normalized_name' => $p->normalized_name ?? $p->name_en,
+                'duplicate_group' => $p->duplicate_group ?? $p->normalized_name ?? $p->name_en,
+                'is_best_selling' => (bool)($p->is_best_selling ?? $p->is_popular ?? false),
+                'is_event' => (bool)($p->is_event ?? false),
+                'display_order' => (int)($p->display_order ?? 9999),
+                'visible' => (bool)($p->visible ?? true),
                 'stock_status' => strtolower((string)($p->stock_status ?? 'available')),
                 'last_stock_check_at' => $p->last_stock_check_at ? (string)$p->last_stock_check_at : null,
                 'provider_stock_message' => $p->provider_stock_message ?? '',
@@ -722,6 +730,25 @@ class AdminController extends Controller
         }
         if ($request->has('is_active')) {
             $package->is_active = (bool)$request->is_active;
+        }
+
+        // Admin Smart Classification Overrides
+        if ($request->has('category_type')) {
+            $package->admin_category_override = (string)$request->category_type;
+            $package->category_type = (string)$request->category_type;
+        }
+        if ($request->has('is_best_selling')) {
+            $package->admin_best_selling_override = (bool)$request->is_best_selling;
+            $package->is_best_selling = (bool)$request->is_best_selling;
+            $package->is_popular = (bool)$request->is_best_selling;
+        }
+        if ($request->has('display_order')) {
+            $package->admin_display_order_override = (int)$request->display_order;
+            $package->display_order = (int)$request->display_order;
+        }
+        if ($request->has('visible')) {
+            $package->admin_visible_override = (bool)$request->visible;
+            $package->visible = (bool)$request->visible;
         }
 
         // Recalculate profit amount & percentage

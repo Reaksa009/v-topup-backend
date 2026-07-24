@@ -44,8 +44,7 @@ class G2BulkSyncService
         return Cache::remember($cacheKey, 86400, function () use ($g2bCode) {
             $url = "{$this->baseUrl}/games/{$g2bCode}/catalogue";
             try {
-                $response = Http::retry(2, 500)
-                    ->timeout(10)
+                $response = Http::timeout(5)
                     ->withHeaders([
                         'X-API-Key' => $this->apiKey,
                         'Accept' => 'application/json',
@@ -109,95 +108,108 @@ class G2BulkSyncService
                 continue;
             }
 
-            // 1. Differentiate between Mobile Legends Global and Mobile Legends Regular
-            // Sync all MLBB catalogue items to both, allowing each to get full package coverage
-            $filteredList = $catalogues;
+            // 1. Group items by normalized_name for smart deduplication
+            $grouped = [];
+            foreach ($catalogues as $item) {
+                $rawName = (string)($item['name'] ?? '');
+                $normName = $this->normalizePackageName($rawName);
+                $price = round((float)($item['amount'] ?? 0), 2);
+                $catId = isset($item['id']) ? (int)$item['id'] : 0;
+                $status = strtolower((string)($item['status'] ?? 'available'));
 
-            // 2. Deduplicate repeating point values: choose only the one that is cheaper (lowest amount)
-            $deduplicatedMap = [];
-            foreach ($filteredList as $item) {
-                $name = (string)($item['name'] ?? '');
-                $amount = round((float)($item['amount'] ?? 0), 2);
-                
-                preg_match('/\d+/', $name, $matches);
-                $points = isset($matches[0]) ? (int)$matches[0] : 0;
-                
-                // If it is a pass/membership without points, group by lowercase name
-                $key = $points > 0 ? "points_{$points}" : "name_" . trim(strtolower($name));
-                
-                if (!isset($deduplicatedMap[$key]) || $amount < $deduplicatedMap[$key]['amount']) {
-                    $deduplicatedMap[$key] = [
-                        'item' => $item,
-                        'amount' => $amount
-                    ];
-                }
+                $grouped[$normName][] = [
+                    'item' => $item,
+                    'norm_name' => $normName,
+                    'price' => $price,
+                    'cat_id' => $catId,
+                    'status' => $status,
+                ];
             }
-            $finalCatalogues = array_column($deduplicatedMap, 'item');
+
+            // 2. Choose ONLY ONE package per normalized_name (Priority: Available > Lowest Price > Lowest ID)
+            $finalCatalogues = [];
+            foreach ($grouped as $normName => $itemsList) {
+                usort($itemsList, function ($a, $b) {
+                    $aAvail = ($a['status'] === 'available' || $a['status'] === 'active' || $a['status'] === '1' || $a['status'] === 1) ? 1 : 0;
+                    $bAvail = ($b['status'] === 'available' || $b['status'] === 'active' || $b['status'] === '1' || $b['status'] === 1) ? 1 : 0;
+
+                    if ($aAvail !== $bAvail) {
+                        return $bAvail <=> $aAvail;
+                    }
+                    if ($a['price'] !== $b['price']) {
+                        return $a['price'] <=> $b['price'];
+                    }
+                    return $a['cat_id'] <=> $b['cat_id'];
+                });
+
+                $finalCatalogues[] = $itemsList[0]['item'];
+            }
 
             $syncedCount = 0;
             $recoveredCount = 0;
             $syncedPackageIds = [];
 
             foreach ($finalCatalogues as $item) {
+                $rawName = (string)($item['name'] ?? '');
+                $normName = $this->normalizePackageName($rawName);
                 $providerPriceUsd = round((float)($item['amount'] ?? 0), 2);
                 $providerPriceKhr = (int)round($providerPriceUsd * 4100);
 
-                preg_match('/\d+/', (string)$item['name'], $matches);
+                preg_match('/\d+/', $rawName, $matches);
                 $points = isset($matches[0]) ? (int)$matches[0] : 0;
 
-                // 3. Guess if it's Best Selling vs Normal Package
-                $nameLower = strtolower((string)$item['name']);
-                $isBestSelling = false;
-                if (
-                    str_contains($nameLower, 'pass') || 
-                    str_contains($nameLower, 'weekly') || 
-                    str_contains($nameLower, 'membership') || 
-                    str_contains($nameLower, 'popular') || 
-                    str_contains($nameLower, 'best')
-                ) {
-                    $isBestSelling = true;
-                } else {
-                    // Match popular point values per game type
-                    if ($g2bCode === 'mlbb' && in_array($points, [56, 86, 172, 257, 344, 706])) {
-                        $isBestSelling = true;
-                    } elseif ($g2bCode === 'freefire_global' && in_array($points, [100, 210, 310, 530])) {
-                        $isBestSelling = true;
-                    } elseif ($g2bCode === 'pubgm' && in_array($points, [60, 325, 660, 1800])) {
-                        $isBestSelling = true;
-                    } elseif (str_contains($g2bCode, 'valorant') && in_array($points, [475, 1000, 2050])) {
-                        $isBestSelling = true;
-                    }
-                }
+                $isEvent = $this->detectEvent($rawName);
+                $isBestSelling = $this->detectBestSelling($gameSlug, $normName, $rawName);
+                $categoryType = $this->determineCategoryType($rawName, $normName, $isBestSelling, $isEvent);
+                $displayOrder = $this->calculateDisplayOrder($categoryType, $normName);
 
-                $packageType = $isBestSelling ? 'best_selling' : 'normal';
-                $isPopular = $isBestSelling ? 1 : 0;
-                $isPass = (str_contains($nameLower, 'pass') || str_contains($nameLower, 'weekly') || str_contains($nameLower, 'membership')) ? 1 : 0;
+                $packageType = $isBestSelling ? 'best_selling' : ($isEvent ? 'event' : 'normal');
+                $isPopular = $isBestSelling;
+                $isPass = (str_contains(strtolower($rawName), 'pass') || str_contains(strtolower($rawName), 'weekly') || str_contains(strtolower($rawName), 'membership'));
 
-                // Determine provider stock status from API item if provided
+                // Determine provider stock status
                 $itemStockStatus = 'available';
                 if (isset($item['status']) && in_array(strtolower($item['status']), ['inactive', 'out_of_stock', 'disabled'])) {
                     $itemStockStatus = 'out_of_stock';
                 }
 
-                // Locate existing package by game_id and provider_catalogue_name
+                // Locate existing package by game_id and normalized_name or provider_catalogue_name
                 $package = Package::where('game_id', $game->id)
-                    ->where('provider_catalogue_name', (string)$item['name'])
+                    ->where(function ($q) use ($normName, $rawName) {
+                        $q->where('normalized_name', $normName)
+                          ->orWhere('duplicate_group', $normName)
+                          ->orWhere('provider_catalogue_name', $rawName);
+                    })
                     ->first();
 
                 if ($package) {
                     $oldStockStatus = $package->stock_status;
                     $newStockStatus = $itemStockStatus;
 
-                    // Update ONLY provider metadata & provider prices. DO NOT overwrite selling_price_usd!
+                    // Respect admin overrides if present
+                    $finalCategoryType = $package->admin_category_override ?? $categoryType;
+                    $finalBestSelling = $package->admin_best_selling_override ?? $isBestSelling;
+                    $finalDisplayOrder = $package->admin_display_order_override ?? $displayOrder;
+                    $finalVisible = $package->admin_visible_override ?? true;
+
                     $package->provider = 'g2bulk';
                     $package->provider_game_code = $g2bCode;
                     $package->provider_catalogue_id = isset($item['id']) ? (string)$item['id'] : null;
-                    $package->provider_catalogue_name = (string)$item['name'];
+                    $package->provider_catalogue_name = $rawName;
                     $package->provider_price_usd = $providerPriceUsd;
                     $package->provider_price_khr = $providerPriceKhr;
                     $package->stock_status = $newStockStatus;
                     $package->last_stock_check_at = now();
                     $package->provider_stock_message = 'Synchronized from G2Bulk API';
+
+                    // Smart classification attributes
+                    $package->normalized_name = $normName;
+                    $package->duplicate_group = $normName;
+                    $package->category_type = $finalCategoryType;
+                    $package->is_best_selling = $finalBestSelling;
+                    $package->is_event = $isEvent;
+                    $package->display_order = $finalDisplayOrder;
+                    $package->visible = $finalVisible;
                     $package->package_type = $packageType;
                     $package->is_popular = $isPopular;
                     $package->is_pass = $isPass;
@@ -256,9 +268,9 @@ class G2BulkSyncService
                         'provider' => 'g2bulk',
                         'provider_game_code' => $g2bCode,
                         'provider_catalogue_id' => isset($item['id']) ? (string)$item['id'] : null,
-                        'provider_catalogue_name' => (string)$item['name'],
-                        'name_en' => (string)$item['name'],
-                        'name_kh' => (string)$item['name'],
+                        'provider_catalogue_name' => $rawName,
+                        'name_en' => $rawName,
+                        'name_kh' => $rawName,
                         'provider_price_usd' => $providerPriceUsd,
                         'provider_price_khr' => $providerPriceKhr,
                         'selling_price_usd' => $defaultSellingUsd,
@@ -274,6 +286,13 @@ class G2BulkSyncService
                         'stock_status' => $itemStockStatus,
                         'last_stock_check_at' => now(),
                         'provider_stock_message' => 'Created via G2Bulk Sync',
+                        'normalized_name' => $normName,
+                        'duplicate_group' => $normName,
+                        'category_type' => $categoryType,
+                        'is_best_selling' => $isBestSelling,
+                        'is_event' => $isEvent,
+                        'display_order' => $displayOrder,
+                        'visible' => true,
                         'package_type' => $packageType,
                         'is_popular' => $isPopular,
                         'is_pass' => $isPass,
@@ -284,11 +303,13 @@ class G2BulkSyncService
                 $syncedCount++;
             }
 
-            // Prune stale/mock packages of this game that were not present in the current sync batch
-            Package::where('game_id', $game->id)
-                ->whereNotIn('_id', $syncedPackageIds)
-                ->delete();
-
+            // Delete stale/unmatched duplicate packages for this game
+            if (!empty($syncedPackageIds)) {
+                Package::where('game_id', $game->id)
+                    ->whereNotIn('_id', $syncedPackageIds)
+                    ->delete();
+            }
+            
             self::purgeTargetedCache($game->slug);
 
             $results[$gameSlug] = [
@@ -300,5 +321,114 @@ class G2BulkSyncService
         }
 
         return $results;
+    }
+
+    public function normalizePackageName(string $rawName): string
+    {
+        $name = trim($rawName);
+
+        // Remove noise in brackets/parentheses e.g. (Promo), (MLBB), etc.
+        $nameClean = preg_replace('/\((?:promo|bonus|mlbb|global|package|packages|discount|special)\)/i', '', $name);
+
+        // Remove noise words
+        $noiseWords = ['diamonds', 'diamond', 'uc', 'vp', 'tokens', 'token', 'robux', 'promo', 'bonus', 'mlbb', 'global', 'package', 'packages'];
+        foreach ($noiseWords as $word) {
+            $nameClean = preg_replace('/\b' . preg_quote($word, '/') . '\b/i', '', $nameClean);
+        }
+
+        $nameClean = trim(preg_replace('/\s+/', ' ', $nameClean));
+
+        // If numeric value exists, extract clean point string
+        if (preg_match('/^(\d+)$/', $nameClean, $matches)) {
+            return (string)$matches[1];
+        }
+
+        return $nameClean ?: $rawName;
+    }
+
+    public function detectEvent(string $rawName): bool
+    {
+        $keywords = [
+            'event', 'promo', 'limited', 'special', 'anniversary', 'recharge',
+            'festival', 'lucky', 'bonus', 'season', 'msc', 'm series', 'm4', 'm5', 'm6',
+            'worlds', 'championship', 'summer', 'winter', 'new year', 'christmas',
+            'halloween', 'valentine', 'ramadan', 'khmer new year', 'songkran'
+        ];
+
+        $nameLower = strtolower($rawName);
+        foreach ($keywords as $kw) {
+            if (str_contains($nameLower, $kw)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public function detectBestSelling(string $gameSlug, string $normalizedName, string $rawName): bool
+    {
+        $nameLower = strtolower($rawName);
+        if (str_contains($nameLower, 'weekly') || str_contains($nameLower, 'twilight') || str_contains($nameLower, 'membership')) {
+            return true;
+        }
+
+        $normDigits = (int)$normalizedName;
+
+        if ($gameSlug === 'mobile-legends' || $gameSlug === 'mobile-khmer' || $gameSlug === 'mobile-legends-global') {
+            return in_array($normDigits, [86, 172, 257, 344, 514, 706, 878, 963]);
+        } elseif ($gameSlug === 'pubg-mobile') {
+            return in_array($normDigits, [60, 325, 660, 1800, 3850]);
+        } elseif ($gameSlug === 'free-fire') {
+            return in_array($normDigits, [100, 310, 520]);
+        } elseif ($gameSlug === 'valorant') {
+            return in_array($normDigits, [475, 1000, 2050, 3650, 5350]);
+        } elseif ($gameSlug === 'honor-of-kings') {
+            return in_array($normDigits, [80, 240, 400, 800, 1200]);
+        }
+
+        return false;
+    }
+
+    public function determineCategoryType(string $rawName, string $normalizedName, bool $isBestSelling, bool $isEvent): string
+    {
+        if ($isEvent) {
+            return 'event';
+        }
+        if ($isBestSelling) {
+            return 'best_selling';
+        }
+
+        $nameLower = strtolower($rawName);
+        if (str_contains($nameLower, 'weekly')) {
+            return 'weekly';
+        }
+        if (str_contains($nameLower, 'monthly')) {
+            return 'monthly';
+        }
+        if (str_contains($nameLower, 'pass') || str_contains($nameLower, 'membership') || str_contains($nameLower, 'twilight') || str_contains($nameLower, 'royale')) {
+            return 'pass';
+        }
+
+        return 'normal';
+    }
+
+    public function calculateDisplayOrder(string $categoryType, string $normalizedName): int
+    {
+        $num = (int)$normalizedName;
+        switch ($categoryType) {
+            case 'best_selling':
+                return 1000 + ($num > 0 ? $num : 99);
+            case 'weekly':
+                return 2000;
+            case 'monthly':
+                return 3000;
+            case 'pass':
+                return 4000;
+            case 'normal':
+                return 5000 + ($num > 0 ? $num : 99);
+            case 'event':
+                return 6000;
+            default:
+                return 7000;
+        }
     }
 }
