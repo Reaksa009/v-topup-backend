@@ -75,8 +75,7 @@ class G2BulkService
         $startTime = microtime(true);
 
         try {
-            $response = Http::retry(3, 1000)
-                ->timeout(10)
+            $response = Http::timeout(5)
                 ->withHeaders([
                     'X-API-Key' => $this->apiKey,
                     'Content-Type' => 'application/json',
